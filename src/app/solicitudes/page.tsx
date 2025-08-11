@@ -66,7 +66,7 @@ export default function SolicitudesClientePage() {
     switch (estado) {
       case 'pendiente':
         return '🟡'
-      case 'confirmada':
+      case 'confirmado':
         return '🟢'
       case 'cancelada':
         return '🔴'
@@ -89,7 +89,7 @@ export default function SolicitudesClientePage() {
 
       {/* Filtro por estado */}
       <div className="mb-6 flex gap-2">
-        {['todas', 'pendiente', 'confirmada', 'cancelada'].map((estado) => (
+        {['todas', 'pendiente', 'confirmado', 'cancelada'].map((estado) => (
           <button
             key={estado}
             onClick={() => setEstadoFiltro(estado)}

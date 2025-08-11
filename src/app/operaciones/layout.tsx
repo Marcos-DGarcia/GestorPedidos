@@ -1,13 +1,16 @@
-// app/operaciones/layout.tsx
 import { ReactNode } from 'react'
 import Link from 'next/link'
 import { cn } from "@/utils/utils"
-
+ 
 const navItems = [
   { label: 'Solicitudes', href: '/operaciones/solicitudes' },
   { label: 'Viajes', href: '/operaciones/viajes' },
   { label: 'Vehículos', href: '/operaciones/vehiculos' },
+  { label: 'Choferes', href: '/operaciones/choferes' }, // ← agregado
   { label: 'Clientes', href: '/operaciones/clientes' },
+  { label: 'Planificacion', href: '/operaciones/planificacion' },
+  { label: 'Mantenimiento', href: '/operaciones/mantenimientos' },
+  
 ]
 
 export default function OperacionesLayout({ children }: { children: ReactNode }) {
