@@ -4,20 +4,18 @@ import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabaseClient'
 import Link from 'next/link'
 
+// Tipos + helpers
 type Solicitud = {
   id: string
   fecha_necesaria: string
   descripcion: string
-  tipo: string
+  tipo: 'punto_a_punto' | 'reparto'
   estado: string
   cliente_id: string
-  archivo_adjunto?: string
+  archivo_adjunto: string | null
 }
-
-type Cliente = {
-  id: string
-  nombre: string
-}
+type Cliente = { id: string; nombre: string }
+const asId = (v: unknown) => String(v ?? '')
 
 export default function SolicitudesPage() {
   const [solicitudes, setSolicitudes] = useState<Solicitud[]>([])
@@ -29,28 +27,68 @@ export default function SolicitudesPage() {
   const fetchSolicitudes = async () => {
     const { data, error } = await supabase
       .from('solicitudes')
-      .select('*')
+      .select('id, fecha_necesaria, descripcion, tipo, estado, cliente_id, archivo_adjunto')
       .order('fecha_necesaria', { ascending: false })
 
     if (error) {
       console.error('Error al cargar solicitudes:', error)
-    } else {
-      setSolicitudes(data)
+      setSolicitudes([])
+      return
     }
+
+    // Normalizar a Solicitud[]
+    const rows = (data ?? []) as Array<{
+      id: unknown
+      fecha_necesaria?: unknown
+      descripcion?: unknown
+      tipo?: unknown
+      estado?: unknown
+      cliente_id: unknown
+      archivo_adjunto?: unknown
+    }>
+
+    const safe: Solicitud[] = rows
+      .map((r) => {
+        const tipoRaw = String(r.tipo ?? 'punto_a_punto')
+        return {
+          id: asId(r.id),
+          fecha_necesaria: String(r.fecha_necesaria ?? ''),
+          descripcion: String(r.descripcion ?? ''),
+          tipo: (tipoRaw === 'reparto' ? 'reparto' : 'punto_a_punto') as 'punto_a_punto' | 'reparto',
+          estado: String(r.estado ?? ''),
+          cliente_id: asId(r.cliente_id),
+          archivo_adjunto: r.archivo_adjunto ? String(r.archivo_adjunto) : null,
+        }
+      })
+      .filter((s) => s.id) // quita filas inválidas
+
+    setSolicitudes(safe)
   }
 
   const fetchClientes = async () => {
-    const { data, error } = await supabase.from('clientes').select('id, nombre')
+    const { data, error } = await supabase
+      .from('clientes')
+      .select('id, nombre')
+      .order('nombre', { ascending: true })
+
     if (error) {
       console.error('Error al cargar clientes:', error)
-    } else {
-      setClientes(data)
-      const map: Record<string, string> = {}
-      data.forEach((cliente) => {
-        map[cliente.id] = cliente.nombre
-      })
-      setClientesMap(map)
+      setClientes([])
+      setClientesMap({})
+      return
     }
+
+    // Normalizar a Cliente[] y map
+    const rows = (data ?? []) as Array<{ id: unknown; nombre: unknown }>
+    const safeClientes: Cliente[] = rows
+      .map((r) => ({ id: asId(r.id), nombre: String(r.nombre ?? '') }))
+      .filter((c) => c.id && c.nombre)
+
+    setClientes(safeClientes)
+
+    const map: Record<string, string> = {}
+    for (const c of safeClientes) map[c.id] = c.nombre
+    setClientesMap(map)
   }
 
   useEffect(() => {
