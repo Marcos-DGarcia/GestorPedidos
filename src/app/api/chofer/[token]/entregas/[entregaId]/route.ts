@@ -38,10 +38,9 @@ async function tryCloseViaje(viaje_id: string) {
 
 export async function PATCH(
   req: NextRequest,
-  { params }: { params: { token: string, entregaId: string } }
+    { params }: { params: Promise<{ token: string; entregaId: string }> }
 ) {
-  const token = params.token
-  const entregaId = params.entregaId
+  const { token, entregaId } = await params
   if (!token || !entregaId) {
     return NextResponse.json({ error: 'Token y entregaId requeridos' }, { status: 400 })
   }
