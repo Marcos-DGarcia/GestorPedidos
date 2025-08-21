@@ -6,6 +6,8 @@ import { supabase } from '@/lib/supabaseClient'
 import dayjs from 'dayjs'
 import clsx from 'clsx'
 
+type VasRow = { viaje_id: string; vehiculo_id: string; chofer_id: string | null }
+
 const ORDER = ['CHASIS','BALANCIN','TRACTOR','SEMI','CAMIONETA'] as const
 type TipoVeh = typeof ORDER[number]
 const LABEL: Record<TipoVeh, string> = {
@@ -47,44 +49,50 @@ export default function PlanificacionFlota() {
         .eq('activo', true)
       setVehiculos(vehiculosData || [])
 
-      // --- VIAJES DEL DÍA (sin relación anidada) ---
-      const { data: viajesData, error: viajesErr } = await supabase
-        .from('viajes')
-        .select(`
-          id,
-          descripcion,
-          fecha_programada,
-          solicitudes (clientes (nombre))
-        `)
-        .eq('fecha_programada', fecha)
-      if (viajesErr) {
-        console.error('viajes error', viajesErr)
+  // --- VIAJES DEL DÍA (sin relación anidada) ---
+  const { data: viajesData, error: viajesErr } = await supabase
+    .from('viajes')
+    .select('id, descripcion, fecha_programada, solicitudes (clientes (nombre))')
+    .eq('fecha_programada', fecha)
+
+  if (viajesErr) {
+    console.error('viajes error', viajesErr)
+  }
+
+  // ⚠️ Map de id -> viaje (no array)
+  const byViajeId = new Map<string, any>(
+    (viajesData ?? []).map((v: any) => [String(v.id), v])
+  )
+
+    // --- ASIGNACIONES (vehiculos_asignados) de esos viajes ---
+    const viajeIds: string[] = (viajesData ?? []).map((v: any) => String(v.id))
+
+    let asignacionesData: Array<{ viaje_id: string; vehiculo_id: string }> = []
+    if (viajeIds.length) {
+      const { data: vasData, error: vasErr } = await supabase
+        .from('vehiculos_asignados')
+        .select('viaje_id, vehiculo_id')
+        .in('viaje_id', viajeIds)
+
+      if (vasErr) {
+        console.error('vehiculos_asignados error', vasErr)
       }
 
-      // Lookup por id de viaje para armar el mapa después
-      const byViajeId = new Map((viajesData ?? []).map(v => [v.id, v]))
+      // ✅ Normalizar por si vienen como UUID/number
+      asignacionesData = (vasData ?? []).map((r: any) => ({
+        viaje_id: String(r.viaje_id),
+        vehiculo_id: String(r.vehiculo_id),
+      }))
+    }
 
-      // --- ASIGNACIONES (vehiculos_asignados) de esos viajes ---
-      const viajeIds = (viajesData ?? []).map(v => v.id)
-      let asignacionesData: Array<{ viaje_id: string; vehiculo_id: string }> = []
-      if (viajeIds.length) {
-        const { data: vasData, error: vasErr } = await supabase
-          .from('vehiculos_asignados')
-          .select('viaje_id, vehiculo_id')
-          .in('viaje_id', viajeIds)
-        if (vasErr) {
-          console.error('vehiculos_asignados error', vasErr)
-        }
-        asignacionesData = vasData ?? []
-      }
+    // Mapa vehiculo_id -> viaje
+    const mapAsignados = new Map<string, any>()
+    asignacionesData.forEach((va) => {
+      const v = byViajeId.get(va.viaje_id)
+      if (v) mapAsignados.set(va.vehiculo_id, v)
+    })
+    setViajesPorVehiculo(mapAsignados)
 
-      // Mapa vehiculo_id -> viaje
-      const mapAsignados = new Map<string, any>()
-      asignacionesData.forEach(va => {
-        const v = byViajeId.get(va.viaje_id)
-        if (v) mapAsignados.set(va.vehiculo_id, v)
-      })
-      setViajesPorVehiculo(mapAsignados)
 
       // Mantenimientos
       const { data: mantenimientoData } = await supabase
