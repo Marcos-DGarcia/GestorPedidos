@@ -5,45 +5,98 @@ import { supabase } from '@/lib/supabaseClient'
 import { getUsuarioActual } from '@/utils/usuario'
 import { useRouter } from 'next/navigation'
 
+// Tipos + helpers
+type EstadoSolicitud = 'pendiente' | 'confirmado' | 'modificado' | 'cerrado' | 'cancelada'
+type TipoSolicitud = 'punto_a_punto' | 'reparto'
+
+type Solicitud = {
+  id: string
+  fecha_necesaria: string
+  descripcion: string
+  tipo: TipoSolicitud
+  estado: EstadoSolicitud
+  archivo_adjunto: string | null
+  cliente_id: string
+}
+
+const asId = (v: unknown) => String(v ?? '')
+
 export default function SolicitudesClientePage() {
-  const [solicitudes, setSolicitudes] = useState<any[]>([])
-  const [estadoFiltro, setEstadoFiltro] = useState<string>('todas')
+  const [solicitudes, setSolicitudes] = useState<Solicitud[]>([])
+  const [estadoFiltro, setEstadoFiltro] = useState<'todas' | EstadoSolicitud>('todas')
   const [cargando, setCargando] = useState(true)
   const router = useRouter()
 
   const cargarSolicitudes = async () => {
     setCargando(true)
-    const usuario = await getUsuarioActual()
 
-    if (!usuario || usuario.rol !== 'cliente') {
+    // 1) Usuario actual normalizado
+    const usuario = await getUsuarioActual().catch(() => null as any)
+    const usuarioId = asId(usuario?.id)
+    const usuarioRol = String(usuario?.rol ?? '')
+
+    if (!usuarioId || usuarioRol !== 'cliente') {
       alert('No autorizado')
       router.push('/')
       return
     }
 
-    let query = supabase
+    // 2) Construir query en pasos (evita el 'unknown' y el select('*'))
+    let q = supabase
       .from('solicitudes')
-      .select('*')
-      .eq('cliente_id', usuario.id)
-      .order('fecha_necesaria', { ascending: false }) // Más reciente primero
+      .select('id, fecha_necesaria, descripcion, tipo, estado, archivo_adjunto, cliente_id')
+      .eq('cliente_id', usuarioId)
+      .order('fecha_necesaria', { ascending: false })
 
     if (estadoFiltro !== 'todas') {
-      query = query.eq('estado', estadoFiltro)
+      q = q.eq('estado', estadoFiltro)
     }
 
-    const { data, error } = await query
+    const { data, error } = await q
 
     if (error) {
       console.error('Error al traer solicitudes:', error)
-    } else {
-      setSolicitudes(data)
+      setSolicitudes([])
+      setCargando(false)
+      return
     }
 
+    // 3) Normalizar filas a tipo fuerte
+    const rows = (data ?? []) as Array<{
+      id: unknown
+      fecha_necesaria?: unknown
+      descripcion?: unknown
+      tipo?: unknown
+      estado?: unknown
+      archivo_adjunto?: unknown
+      cliente_id: unknown
+    }>
+
+    const safe: Solicitud[] = rows
+      .map((r) => {
+        const tipoRaw = String(r.tipo ?? 'punto_a_punto')
+        const tipo: TipoSolicitud = tipoRaw === 'reparto' ? 'reparto' : 'punto_a_punto'
+        const estadoRaw = String(r.estado ?? 'pendiente') as EstadoSolicitud
+
+        return {
+          id: asId(r.id),
+          fecha_necesaria: String(r.fecha_necesaria ?? ''),
+          descripcion: String(r.descripcion ?? ''),
+          tipo,
+          estado: estadoRaw,
+          archivo_adjunto: r.archivo_adjunto ? String(r.archivo_adjunto) : null,
+          cliente_id: asId(r.cliente_id),
+        }
+      })
+      .filter((s) => s.id)
+
+    setSolicitudes(safe)
     setCargando(false)
   }
 
   useEffect(() => {
     cargarSolicitudes()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [estadoFiltro])
 
   const cancelarSolicitud = async (id: string) => {
@@ -62,7 +115,7 @@ export default function SolicitudesClientePage() {
     }
   }
 
-  const obtenerIconoEstado = (estado: string) => {
+  const obtenerIconoEstado = (estado: EstadoSolicitud) => {
     switch (estado) {
       case 'pendiente':
         return '🟡'
@@ -70,6 +123,10 @@ export default function SolicitudesClientePage() {
         return '🟢'
       case 'cancelada':
         return '🔴'
+      case 'modificado':
+        return '🟠'
+      case 'cerrado':
+        return '🔵'
       default:
         return ''
     }
@@ -89,19 +146,21 @@ export default function SolicitudesClientePage() {
 
       {/* Filtro por estado */}
       <div className="mb-6 flex gap-2">
-        {['todas', 'pendiente', 'confirmado', 'cancelada'].map((estado) => (
-          <button
-            key={estado}
-            onClick={() => setEstadoFiltro(estado)}
-            className={`px-3 py-1 rounded border ${
-              estadoFiltro === estado
-                ? 'bg-blue-500 text-white'
-                : 'bg-white text-gray-800 hover:bg-gray-100'
-            }`}
-          >
-            {estado.charAt(0).toUpperCase() + estado.slice(1)}
-          </button>
-        ))}
+        {(['todas', 'pendiente', 'confirmado', 'modificado', 'cerrado', 'cancelada'] as const).map(
+          (estado) => (
+            <button
+              key={estado}
+              onClick={() => setEstadoFiltro(estado)}
+              className={`px-3 py-1 rounded border ${
+                estadoFiltro === estado
+                  ? 'bg-blue-500 text-white'
+                  : 'bg-white text-gray-800 hover:bg-gray-100'
+              }`}
+            >
+              {estado.charAt(0).toUpperCase() + estado.slice(1)}
+            </button>
+          )
+        )}
       </div>
 
       {cargando ? (
@@ -112,9 +171,15 @@ export default function SolicitudesClientePage() {
         <ul className="space-y-4">
           {solicitudes.map((solicitud) => (
             <li key={solicitud.id} className="border p-4 rounded shadow bg-white">
-              <p><strong>Fecha:</strong> {solicitud.fecha_necesaria}</p>
-              <p><strong>Tipo:</strong> {solicitud.tipo}</p>
-              <p><strong>Descripción:</strong> {solicitud.descripcion}</p>
+              <p>
+                <strong>Fecha:</strong> {solicitud.fecha_necesaria}
+              </p>
+              <p>
+                <strong>Tipo:</strong> {solicitud.tipo}
+              </p>
+              <p>
+                <strong>Descripción:</strong> {solicitud.descripcion}
+              </p>
               <p>
                 <strong>Estado:</strong> {obtenerIconoEstado(solicitud.estado)} {solicitud.estado}
               </p>

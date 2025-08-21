@@ -1,27 +1,49 @@
-// app/operaciones/viajes/[id]/page.tsx  (client)
+// app/operaciones/viajes/[id]/page.tsx
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabaseClient'
 
+// Helpers
+const asId = (v: unknown) => String(v ?? '')
+const getTipoNombre = (vehiculo: any): string | undefined => {
+  const rel = vehiculo?.tipos_vehiculo
+  if (Array.isArray(rel)) return rel[0]?.nombre
+  return rel?.nombre
+}
+
+// Tipos mínimos
 type Asignacion = {
   id: string
   viaje_id: string
   vehiculo_id: string
   chofer_id: string
   observaciones: string | null
-  vehiculos?: { patente?: string; descripcion?: string } | null
+}
+type VehiculoRow = {
+  id: string
+  patente?: string | null
+  descripcion?: string | null
+  tipos_vehiculo?: { nombre?: string | null } | { nombre?: string | null }[] | null
+}
+type ChoferRow = { id: string; nombre?: string | null }
+type ViajeRow = {
+  id: string
+  descripcion?: string | null
+  fecha_programada?: string | null
+  estado?: string | null
+  solicitudes?: { clientes?: { nombre?: string | null } | null } | null
 }
 
 export default function AsignarViaje() {
   const { id } = useParams<{ id: string }>()
-  const viajeId = String(id)
+  const viajeId = asId(id)
   const router = useRouter()
 
-  const [viaje, setViaje] = useState<any>(null)
-  const [vehiculos, setVehiculos] = useState<any[]>([])
-  const [choferes, setChoferes] = useState<any[]>([])
+  const [viaje, setViaje] = useState<ViajeRow | null>(null)
+  const [vehiculos, setVehiculos] = useState<VehiculoRow[]>([])
+  const [choferes, setChoferes] = useState<ChoferRow[]>([])
   const [asignaciones, setAsignaciones] = useState<Asignacion[]>([])
 
   const [vehiculoSeleccionado, setVehiculoSeleccionado] = useState('')
@@ -43,42 +65,60 @@ export default function AsignarViaje() {
   const [entregasTotal, setEntregasTotal] = useState(0)
   const [entregasDone, setEntregasDone] = useState(0)
 
+  // Map auxiliar para mostrar patente/desc desde asignaciones
+  const vehById = useMemo(() => {
+    const m = new Map<string, VehiculoRow>()
+    for (const v of vehiculos) m.set(asId(v.id), v)
+    return m
+  }, [vehiculos])
+
   useEffect(() => {
     const fetchData = async () => {
       try {
+        // Viaje + cliente (solo lectura)
         const { data: viajeData } = await supabase
           .from('viajes')
-          .select('*, solicitudes (cliente_id, clientes(nombre), tipo_viaje)')
+          .select('id, descripcion, fecha_programada, estado, solicitudes (clientes (nombre))')
           .eq('id', viajeId)
           .single()
 
+        // Vehículos activos
         const { data: vehiculosData } = await supabase
           .from('vehiculos')
-          .select('*, tipos_vehiculo(nombre)')
+          .select('id, patente, descripcion, tipos_vehiculo(nombre)')
+          .eq('activo', true)
 
+        // Choferes
         const { data: choferesData } = await supabase
           .from('choferes')
-          .select('*')
+          .select('id, nombre')
 
+        // Asignaciones (⚠️ sin join)
         const { data: asignacionesData } = await supabase
           .from('vehiculos_asignados')
-          .select('*, vehiculos(patente, descripcion)')
+          .select('id, viaje_id, vehiculo_id, chofer_id, observaciones')
           .eq('viaje_id', viajeId)
 
-        // token existente
+        // Token existente
         const { data: linkData } = await supabase
           .from('viajes_links')
           .select('token')
           .eq('viaje_id', viajeId)
           .maybeSingle()
 
-        setViaje(viajeData)
-        setVehiculos(vehiculosData ?? [])
-        setChoferes(choferesData ?? [])
+        setViaje((viajeData ?? null) as ViajeRow)
+        setVehiculos((vehiculosData ?? []) as VehiculoRow[])
+        setChoferes((choferesData ?? []) as ChoferRow[])
 
-        // 🔧 fix: castear FUERA del set para que TS no marque error
-        const asign = Array.isArray(asignacionesData) ? asignacionesData : []
-        setAsignaciones(asign as Asignacion[])
+        // Normalizar asignaciones -> Asignacion[]
+        const asign: Asignacion[] = (asignacionesData ?? []).map((r: any) => ({
+          id: asId(r?.id),
+          viaje_id: asId(r?.viaje_id),
+          vehiculo_id: asId(r?.vehiculo_id),
+          chofer_id: asId(r?.chofer_id),
+          observaciones: (r?.observaciones ?? null) as string | null,
+        }))
+        setAsignaciones(asign)
 
         const tok =
           linkData && typeof (linkData as any).token === 'string'
@@ -117,8 +157,8 @@ export default function AsignarViaje() {
   }
 
   const esTractor = () => {
-    const vehiculo = vehiculos.find((v) => v.id === vehiculoSeleccionado)
-    return vehiculo?.tipos_vehiculo?.nombre === 'TRACTOR'
+    const v = vehById.get(asId(vehiculoSeleccionado))
+    return getTipoNombre(v)?.toUpperCase() === 'TRACTOR'
   }
 
   const handleArchivoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -163,16 +203,16 @@ export default function AsignarViaje() {
     const asignacionesInsert: Partial<Asignacion>[] = [
       {
         viaje_id: viajeId,
-        vehiculo_id: vehiculoSeleccionado,
-        chofer_id: choferSeleccionado,
+        vehiculo_id: asId(vehiculoSeleccionado),
+        chofer_id: asId(choferSeleccionado),
         observaciones: '',
       },
     ]
     if (esTractor()) {
       asignacionesInsert.push({
         viaje_id: viajeId,
-        vehiculo_id: vehiculoRemolque,
-        chofer_id: choferSeleccionado,
+        vehiculo_id: asId(vehiculoRemolque),
+        chofer_id: asId(choferSeleccionado),
         observaciones: 'Remolque asignado junto a tractor',
       })
     }
@@ -199,12 +239,19 @@ export default function AsignarViaje() {
       console.error('Error al actualizar estado:', updateError)
       setMensaje('Asignado, pero no se pudo cambiar el estado.')
     } else {
+      // Refetch asignaciones sin join + normalización
       const { data: asignacionesData } = await supabase
         .from('vehiculos_asignados')
-        .select('*, vehiculos(patente, descripcion)')
+        .select('id, viaje_id, vehiculo_id, chofer_id, observaciones')
         .eq('viaje_id', viajeId)
 
-      const asign: Asignacion[] = (asignacionesData ?? []) as Asignacion[]
+      const asign: Asignacion[] = (asignacionesData ?? []).map((r: any) => ({
+        id: asId(r?.id),
+        viaje_id: asId(r?.viaje_id),
+        vehiculo_id: asId(r?.vehiculo_id),
+        chofer_id: asId(r?.chofer_id),
+        observaciones: (r?.observaciones ?? null) as string | null,
+      }))
       setAsignaciones(asign)
 
       setMensaje('Asignación realizada.')
@@ -332,11 +379,15 @@ export default function AsignarViaje() {
         <div>
           <h3 className="font-semibold mb-1">Vehículos ya asignados:</h3>
           <ul className="list-disc list-inside">
-            {asignaciones.map((a) => (
-              <li key={a.id}>
-                {a.vehiculos?.patente} - {a.vehiculos?.descripcion} {a.observaciones && `(Obs: ${a.observaciones})`}
-              </li>
-            ))}
+            {asignaciones.map((a) => {
+              const vv = vehById.get(asId(a.vehiculo_id))
+              return (
+                <li key={a.id}>
+                  {vv?.patente ?? '—'} - {vv?.descripcion ?? '—'}{' '}
+                  {a.observaciones && `(Obs: ${a.observaciones})`}
+                </li>
+              )
+            })}
           </ul>
         </div>
       )}
@@ -354,7 +405,7 @@ export default function AsignarViaje() {
           >
             <option value="">Seleccione un vehículo</option>
             {vehiculos.map((v) => (
-              <option key={v.id} value={v.id}>
+              <option key={asId(v.id)} value={asId(v.id)}>
                 {v.patente} - {v.descripcion}
               </option>
             ))}
@@ -371,9 +422,9 @@ export default function AsignarViaje() {
             >
               <option value="">Seleccione un vehículo</option>
               {vehiculos
-                .filter((v) => v.id !== vehiculoSeleccionado && v.tipos_vehiculo?.nombre === 'SEMI')
+                .filter((v) => asId(v.id) !== asId(vehiculoSeleccionado) && getTipoNombre(v)?.toUpperCase() === 'SEMI')
                 .map((v) => (
-                  <option key={v.id} value={v.id}>
+                  <option key={asId(v.id)} value={asId(v.id)}>
                     {v.patente} - {v.descripcion}
                   </option>
                 ))}
@@ -390,7 +441,7 @@ export default function AsignarViaje() {
           >
             <option value="">Seleccione un chofer</option>
             {choferes.map((c) => (
-              <option key={c.id} value={c.id}>
+              <option key={asId(c.id)} value={asId(c.id)}>
                 {c.nombre}
               </option>
             ))}
