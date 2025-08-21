@@ -1,5 +1,5 @@
 import { notFound } from 'next/navigation'
-import ChoferClient from './ui/ChoferClient'   // ⬅️ import AL TOPE (casing exacto)
+import ChoferClient from './ui/choferClient'   // ⬅️ import AL TOPE (casing exacto)
 
 export const dynamic = 'force-dynamic'
 
