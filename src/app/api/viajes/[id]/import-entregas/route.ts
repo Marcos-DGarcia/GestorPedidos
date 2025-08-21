@@ -5,8 +5,8 @@ import crypto from 'crypto'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
-  const { id: viaje_id } = params
+export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+    const { id: viaje_id } = await params
   try {
     const form = await req.formData()
     const file = form.get('file') as File | null
