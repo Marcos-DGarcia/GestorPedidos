@@ -68,85 +68,85 @@ export default function ListaViajes() {
   }
 
   // --- Viajes con filtros/orden ---
-  const fetchViajes = async () => {
-    setLoading(true)
-    setErrorMsg(null)
+  // --- Viajes con filtros/orden ---
+const fetchViajes = async () => {
+  setLoading(true)
+  setErrorMsg(null)
 
-    // Query base (sin filtrar por cliente del usuario; esto es Operaciones)
-    let q = supabase
-      .from('viajes')
-      .select(`
+  let q = supabase
+    .from('viajes')
+    .select(`
+      id,
+      descripcion,
+      fecha_programada,
+      estado,
+      solicitudes:solicitudes (
+        cliente_id,
+        clientes ( nombre )
+      ),
+      vehiculos_asignados (
         id,
-        descripcion,
-        fecha_programada,
-        estado,
-        solicitudes:solicitudes (
-          cliente_id,
-          clientes ( nombre )
-        ),
-        vehiculos_asignados (
-          id,
-          vehiculos ( patente, descripcion ),
-          choferes ( nombre )
-        )
-      `)
+        vehiculos ( patente, descripcion ),
+        choferes ( nombre )
+      )
+    `)
 
-    if (filtroEstado) q = q.eq('estado', filtroEstado)
-    if (clienteFiltroId) q = q.eq('solicitudes.cliente_id', clienteFiltroId)
+  if (filtroEstado) q = q.eq('estado', filtroEstado)
+  if (clienteFiltroId) q = q.eq('solicitudes.cliente_id', clienteFiltroId)
+  q = q.order('fecha_programada', { ascending: orden === 'asc' })
 
-    q = q.order('fecha_programada', { ascending: orden === 'asc' })
-
-    const { data, error } = await q
-    if (error) {
-      console.error('Error viajes:', error)
-      setErrorMsg('Error al traer viajes.')
-      setViajes([])
-      setLoading(false)
-      return
-    }
-
-    // Normalización fuerte
-    type Row = {
-      id: unknown
-      descripcion?: unknown
-      fecha_programada?: unknown
-      estado?: unknown
-      solicitudes?: {
-        cliente_id?: unknown
-        clientes?: { nombre?: unknown } | null
-      } | null
-      vehiculos_asignados?: Array<{
-        id?: unknown
-        vehiculos?: { patente?: unknown; descripcion?: unknown } | null
-        choferes?: { nombre?: unknown } | null
-      }>
-    }
-
-    const rows = ((data ?? []) as Row[])
-
-
-    const safe: Viaje[] = rows.map(r => ({
-      id: asId(r.id),
-      descripcion: asStr(r.descripcion),
-      fecha_programada: asStr(r.fecha_programada),
-      estado: asStr(r.estado),
-      solicitud: r.solicitudes
-        ? {
-            cliente_id: asId(r.solicitudes.cliente_id),
-            cliente_nombre: asStr(r.solicitudes.clientes?.nombre),
-          }
-        : null,
-      asignaciones: (r.vehiculos_asignados ?? []).map(a => ({
-        id: asId(a.id),
-        vehiculo_patente: a.vehiculos?.patente ? asStr(a.vehiculos.patente) : undefined,
-        vehiculo_desc: a.vehiculos?.descripcion ? asStr(a.vehiculos.descripcion) : undefined,
-        chofer_nombre: a.choferes?.nombre ? asStr(a.choferes.nombre) : undefined,
-      })),
-    }))
-
-    setViajes(safe)
-    setLoading(false)
+  // ⬇️ Tipamos el retorno del select (evita el cast que rompía el build)
+  type RowDB = {
+    id: unknown
+    descripcion?: unknown
+    fecha_programada?: unknown
+    estado?: unknown
+    solicitudes?: {
+      cliente_id?: unknown
+      clientes?: { nombre?: unknown } | null
+    } | null
+    vehiculos_asignados?: Array<{
+      id?: unknown
+      vehiculos?: { patente?: unknown; descripcion?: unknown } | null
+      choferes?: { nombre?: unknown } | null
+    }>
   }
+
+  const { data, error } = await q.returns<RowDB[]>()
+
+  if (error) {
+    console.error('Error viajes:', error)
+    setErrorMsg('Error al traer viajes.')
+    setViajes([])
+    setLoading(false)
+    return
+  }
+
+  const rows = data ?? []
+
+  const safe: Viaje[] = rows.map(r => ({
+    id: asId(r.id),
+    descripcion: asStr(r.descripcion),
+    fecha_programada: asStr(r.fecha_programada),
+    estado: asStr(r.estado),
+    solicitud: r.solicitudes
+      ? {
+          cliente_id: asId(r.solicitudes.cliente_id),
+          cliente_nombre: asStr(r.solicitudes.clientes?.nombre),
+        }
+      : null,
+    asignaciones: (r.vehiculos_asignados ?? []).map(a => ({
+      id: asId(a.id),
+      vehiculo_patente: a.vehiculos?.patente ? asStr(a.vehiculos.patente) : undefined,
+      vehiculo_desc: a.vehiculos?.descripcion ? asStr(a.vehiculos.descripcion) : undefined,
+      chofer_nombre: a.choferes?.nombre ? asStr(a.choferes.nombre) : undefined,
+    })),
+  }))
+
+  setViajes(safe)
+  setLoading(false)
+}
+
 
   useEffect(() => {
     fetchClientes()
