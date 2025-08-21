@@ -47,20 +47,43 @@ export default function PlanificacionFlota() {
         .eq('activo', true)
       setVehiculos(vehiculosData || [])
 
-      // Viajes del día con vehículos asignados
-      const { data: viajesData } = await supabase
+      // --- VIAJES DEL DÍA (sin relación anidada) ---
+      const { data: viajesData, error: viajesErr } = await supabase
         .from('viajes')
         .select(`
           id,
           descripcion,
           fecha_programada,
-          solicitudes (clientes (nombre)),
-          vehiculos_asignados (vehiculo_id)
+          solicitudes (clientes (nombre))
         `)
         .eq('fecha_programada', fecha)
+      if (viajesErr) {
+        console.error('viajes error', viajesErr)
+      }
 
+      // Lookup por id de viaje para armar el mapa después
+      const byViajeId = new Map((viajesData ?? []).map(v => [v.id, v]))
+
+      // --- ASIGNACIONES (vehiculos_asignados) de esos viajes ---
+      const viajeIds = (viajesData ?? []).map(v => v.id)
+      let asignacionesData: Array<{ viaje_id: string; vehiculo_id: string }> = []
+      if (viajeIds.length) {
+        const { data: vasData, error: vasErr } = await supabase
+          .from('vehiculos_asignados')
+          .select('viaje_id, vehiculo_id')
+          .in('viaje_id', viajeIds)
+        if (vasErr) {
+          console.error('vehiculos_asignados error', vasErr)
+        }
+        asignacionesData = vasData ?? []
+      }
+
+      // Mapa vehiculo_id -> viaje
       const mapAsignados = new Map<string, any>()
-      viajesData?.forEach(v => v.vehiculos_asignados?.forEach((va:any)=> mapAsignados.set(va.vehiculo_id, v)))
+      asignacionesData.forEach(va => {
+        const v = byViajeId.get(va.viaje_id)
+        if (v) mapAsignados.set(va.vehiculo_id, v)
+      })
       setViajesPorVehiculo(mapAsignados)
 
       // Mantenimientos
