@@ -1,17 +1,28 @@
+// app/operaciones/viajes/[id]/page.tsx  (client)
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabaseClient'
 
+type Asignacion = {
+  id: string
+  viaje_id: string
+  vehiculo_id: string
+  chofer_id: string
+  observaciones: string | null
+  vehiculos?: { patente?: string; descripcion?: string } | null
+}
+
 export default function AsignarViaje() {
-  const { id } = useParams()
+  const { id } = useParams<{ id: string }>()
+  const viajeId = String(id)
   const router = useRouter()
 
   const [viaje, setViaje] = useState<any>(null)
   const [vehiculos, setVehiculos] = useState<any[]>([])
   const [choferes, setChoferes] = useState<any[]>([])
-  const [asignaciones, setAsignaciones] = useState<any[]>([])
+  const [asignaciones, setAsignaciones] = useState<Asignacion[]>([])
 
   const [vehiculoSeleccionado, setVehiculoSeleccionado] = useState('')
   const [vehiculoRemolque, setVehiculoRemolque] = useState('')
@@ -21,76 +32,88 @@ export default function AsignarViaje() {
   const [mensaje, setMensaje] = useState('')
   const [subiendoArchivo, setSubiendoArchivo] = useState(false)
 
-  // NUEVO: estado para despachar
   const [enviando, setEnviando] = useState(false)
   const [despachoMsg, setDespachoMsg] = useState<string | null>(null)
 
-  // NUEVO: importar Excel de entregas
   const [archivoEntregas, setArchivoEntregas] = useState<File | null>(null)
   const [importando, setImportando] = useState(false)
   const [portalUrl, setPortalUrl] = useState<string | null>(null)
   const [tokenChofer, setTokenChofer] = useState<string | null>(null)
 
-  // NUEVO: progreso básico de entregas
   const [entregasTotal, setEntregasTotal] = useState(0)
   const [entregasDone, setEntregasDone] = useState(0)
 
   useEffect(() => {
     const fetchData = async () => {
-      const { data: viajeData } = await supabase
-        .from('viajes')
-        .select('*, solicitudes (cliente_id, clientes(nombre), tipo_viaje)')
-        .eq('id', id)
-        .single()
+      try {
+        const { data: viajeData } = await supabase
+          .from('viajes')
+          .select('*, solicitudes (cliente_id, clientes(nombre), tipo_viaje)')
+          .eq('id', viajeId)
+          .single()
 
-      const { data: vehiculosData } = await supabase
-        .from('vehiculos')
-        .select('*, tipos_vehiculo(nombre)')
+        const { data: vehiculosData } = await supabase
+          .from('vehiculos')
+          .select('*, tipos_vehiculo(nombre)')
 
-      const { data: choferesData } = await supabase
-        .from('choferes')
-        .select('*')
+        const { data: choferesData } = await supabase
+          .from('choferes')
+          .select('*')
 
-      const { data: asignacionesData } = await supabase
-        .from('vehiculos_asignados')
-        .select('*, vehiculos(patente, descripcion)')
-        .eq('viaje_id', id)
+        const { data: asignacionesData } = await supabase
+          .from('vehiculos_asignados')
+          .select('*, vehiculos(patente, descripcion)')
+          .eq('viaje_id', viajeId)
 
-      // NUEVO: obtener token existente (si ya se generó)
-      const { data: linkData } = await supabase
-        .from('viajes_links')
-        .select('token')
-        .eq('viaje_id', id)
-        .maybeSingle()
+        // token existente
+        const { data: linkData } = await supabase
+          .from('viajes_links')
+          .select('token')
+          .eq('viaje_id', viajeId)
+          .maybeSingle()
 
-      setViaje(viajeData)
-      setVehiculos(vehiculosData || [])
-      setChoferes(choferesData || [])
-      setAsignaciones(asignacionesData || [])
-      if (linkData?.token) {
-        setTokenChofer(linkData.token)
-        // si ya tenés dominio público, podés construir el link; si no, lo setea el import
-        const base = process.env.NEXT_PUBLIC_BASE_URL
-        if (base) setPortalUrl(`${base}/chofer/${linkData.token}`)
+        setViaje(viajeData)
+        setVehiculos(vehiculosData ?? [])
+        setChoferes(choferesData ?? [])
+
+        // 🔧 fix: castear FUERA del set para que TS no marque error
+        const asign = Array.isArray(asignacionesData) ? asignacionesData : []
+        setAsignaciones(asign as Asignacion[])
+
+        const tok =
+          linkData && typeof (linkData as any).token === 'string'
+            ? String((linkData as any).token)
+            : null
+
+        if (tok) {
+          setTokenChofer(tok)
+          const base = process.env.NEXT_PUBLIC_BASE_URL || window.location.origin
+          setPortalUrl(`${base}/chofer/${tok}`)
+        }
+
+        await refreshProgreso()
+      } catch (err) {
+        console.error('fetchData error', err)
       }
-
-      // NUEVO: progreso inicial de entregas
-      await refreshProgreso()
     }
 
     fetchData()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id])
+  }, [viajeId])
 
   const refreshProgreso = async () => {
-    const { data: todas } = await supabase
-      .from('viajes_entregas')
-      .select('id, estado_entrega')
-      .eq('viaje_id', id)
-    const total = todas?.length ?? 0
-    const done = (todas ?? []).filter(r => r.estado_entrega === 'entregado').length
-    setEntregasTotal(total)
-    setEntregasDone(done)
+    try {
+      const { data: todas } = await supabase
+        .from('viajes_entregas')
+        .select('id, estado_entrega')
+        .eq('viaje_id', viajeId)
+      const total = todas?.length ?? 0
+      const done = (todas ?? []).filter(r => r.estado_entrega === 'entregado').length
+      setEntregasTotal(total)
+      setEntregasDone(done)
+    } catch (e) {
+      console.error('refreshProgreso', e)
+    }
   }
 
   const esTractor = () => {
@@ -99,27 +122,27 @@ export default function AsignarViaje() {
   }
 
   const handleArchivoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files.length > 0) {
-      setArchivoDetalle(e.target.files[0])
-    }
+    if (e.target.files?.length) setArchivoDetalle(e.target.files[0])
   }
 
   const subirArchivoDetalle = async (): Promise<string | null> => {
     if (!archivoDetalle) return null
-    setSubiendoArchivo(true)
-    const nombreArchivo = `viaje_${id}_${Date.now()}_${archivoDetalle.name}`
-    const { error: uploadError } = await supabase.storage
-      .from('adjuntos')
-      .upload(nombreArchivo, archivoDetalle, { upsert: true })
-    if (uploadError) {
-      console.error('Error al subir archivo:', uploadError)
+    try {
+      setSubiendoArchivo(true)
+      const nombreArchivo = `viaje_${viajeId}_${Date.now()}_${archivoDetalle.name}`
+      const { error: uploadError } = await supabase.storage
+        .from('adjuntos')
+        .upload(nombreArchivo, archivoDetalle, { upsert: true })
+      if (uploadError) throw uploadError
+      const { data } = supabase.storage.from('adjuntos').getPublicUrl(nombreArchivo)
+      return data?.publicUrl || null
+    } catch (e) {
+      console.error('Error al subir archivo:', e)
       setMensaje('Error al subir el archivo de detalle.')
-      setSubiendoArchivo(false)
       return null
+    } finally {
+      setSubiendoArchivo(false)
     }
-    const { data } = supabase.storage.from('adjuntos').getPublicUrl(nombreArchivo)
-    setSubiendoArchivo(false)
-    return data?.publicUrl || null
   }
 
   const asignar = async () => {
@@ -135,14 +158,11 @@ export default function AsignarViaje() {
     }
 
     let archivoUrl: string | null = null
-    if (archivoDetalle) {
-      archivoUrl = await subirArchivoDetalle()
-    }
+    if (archivoDetalle) archivoUrl = await subirArchivoDetalle()
 
-    // 1) Insertar asignaciones
-    const asignacionesInsert = [
+    const asignacionesInsert: Partial<Asignacion>[] = [
       {
-        viaje_id: id,
+        viaje_id: viajeId,
         vehiculo_id: vehiculoSeleccionado,
         chofer_id: choferSeleccionado,
         observaciones: '',
@@ -150,7 +170,7 @@ export default function AsignarViaje() {
     ]
     if (esTractor()) {
       asignacionesInsert.push({
-        viaje_id: id,
+        viaje_id: viajeId,
         vehiculo_id: vehiculoRemolque,
         chofer_id: choferSeleccionado,
         observaciones: 'Remolque asignado junto a tractor',
@@ -167,36 +187,35 @@ export default function AsignarViaje() {
       return
     }
 
-    // 2) Actualizar viaje con estado y archivo de detalle
     const { error: updateError } = await supabase
       .from('viajes')
       .update({
         estado: 'asignado',
         ...(archivoUrl ? { archivo_detalle: archivoUrl } : {}),
       })
-      .eq('id', id)
+      .eq('id', viajeId)
 
     if (updateError) {
       console.error('Error al actualizar estado:', updateError)
       setMensaje('Asignado, pero no se pudo cambiar el estado.')
     } else {
-      // refrescar asignaciones actuales para habilitar botón Despachar
       const { data: asignacionesData } = await supabase
         .from('vehiculos_asignados')
         .select('*, vehiculos(patente, descripcion)')
-        .eq('viaje_id', id)
-      setAsignaciones(asignacionesData || [])
+        .eq('viaje_id', viajeId)
+
+      const asign: Asignacion[] = (asignacionesData ?? []) as Asignacion[]
+      setAsignaciones(asign)
+
       setMensaje('Asignación realizada.')
     }
   }
 
-  // ✅ Condición para mostrar el botón "Despachar viaje"
   const listoParaDespachar = useMemo(() => {
-    if (!asignaciones || asignaciones.length === 0) return false
+    if (!asignaciones?.length) return false
     return asignaciones.some((a) => a.chofer_id && a.vehiculo_id)
   }, [asignaciones])
 
-  // Llama al endpoint /api/operaciones/despachar
   const despachar = async (canal: 'whatsapp' | 'sms' = 'whatsapp') => {
     try {
       setEnviando(true)
@@ -204,7 +223,7 @@ export default function AsignarViaje() {
       const res = await fetch('/api/operaciones/despachar', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ viajeId: id, canal }),
+        body: JSON.stringify({ viajeId, canal }),
       })
       const json = await res.json()
       if (!res.ok) throw new Error(json?.error || 'No se pudo despachar el viaje')
@@ -216,9 +235,6 @@ export default function AsignarViaje() {
     }
   }
 
-  // =========================
-  // NUEVO: importar entregas
-  // =========================
   const onImportSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!archivoEntregas) return
@@ -226,16 +242,22 @@ export default function AsignarViaje() {
       setImportando(true)
       const fd = new FormData()
       fd.append('file', archivoEntregas)
-      const res = await fetch(`/api/viajes/${id}/import-entregas`, {
+      const res = await fetch(`/api/viajes/${viajeId}/import-entregas`, {
         method: 'POST',
         body: fd
       })
       const json = await res.json()
       if (!res.ok) throw new Error(json?.error || 'No se pudo importar el Excel')
-      // guardar link y token
-      if (json.portalUrl) setPortalUrl(json.portalUrl)
-      if (json.token) setTokenChofer(json.token)
-      // refrescar progreso
+
+      if (typeof json.portalUrl === 'string') setPortalUrl(json.portalUrl)
+      if (typeof json.token === 'string') {
+        setTokenChofer(json.token)
+        if (!json.portalUrl) {
+          const base = process.env.NEXT_PUBLIC_BASE_URL || window.location.origin
+          setPortalUrl(`${base}/chofer/${json.token}`)
+        }
+      }
+
       await refreshProgreso()
     } catch (err: any) {
       alert(`Error al importar: ${err.message}`)
@@ -257,7 +279,6 @@ export default function AsignarViaje() {
         </div>
       )}
 
-      {/* NUEVO: Importar entregas (Excel) */}
       <div className="rounded border p-4">
         <h2 className="font-semibold mb-2">Importar entregas (Excel)</h2>
         <form onSubmit={onImportSubmit} className="flex flex-col gap-3 sm:flex-row sm:items-center">
@@ -275,14 +296,12 @@ export default function AsignarViaje() {
             {importando ? 'Importando…' : 'Importar'}
           </button>
 
-          {/* Progreso simple si hay entregas cargadas */}
           {entregasTotal > 0 && (
             <span className="text-sm text-gray-700">
               Progreso: {entregasDone}/{entregasTotal}
             </span>
           )}
 
-          {/* Link del chofer si está disponible */}
           {portalUrl && (
             <a
               className="text-blue-600 underline"
@@ -295,10 +314,9 @@ export default function AsignarViaje() {
             </a>
           )}
 
-          {/* Acceso rápido a vista de operaciones de entregas */}
           <button
             type="button"
-            onClick={() => router.push(`/operaciones/viajes/${id}/entregas`)}
+            onClick={() => router.push(`/operaciones/viajes/${viajeId}/entregas`)}
             className="px-3 py-2 rounded border hover:bg-gray-50"
             title="Ver entregas en Operaciones"
           >
@@ -323,7 +341,6 @@ export default function AsignarViaje() {
         </div>
       )}
 
-      {/* Formulario de asignación */}
       <div className="grid gap-4 sm:grid-cols-2">
         <div>
           <label className="block mb-1 font-semibold">Vehículo:</label>
@@ -354,11 +371,7 @@ export default function AsignarViaje() {
             >
               <option value="">Seleccione un vehículo</option>
               {vehiculos
-                .filter(
-                  (v) =>
-                    v.id !== vehiculoSeleccionado &&
-                    v.tipos_vehiculo?.nombre === 'SEMI'
-                )
+                .filter((v) => v.id !== vehiculoSeleccionado && v.tipos_vehiculo?.nombre === 'SEMI')
                 .map((v) => (
                   <option key={v.id} value={v.id}>
                     {v.patente} - {v.descripcion}
@@ -404,7 +417,6 @@ export default function AsignarViaje() {
           {subiendoArchivo ? 'Subiendo archivo...' : 'Asignar'}
         </button>
 
-        {/* ✅ Botones de Despacho: sólo si hay asignaciones válidas */}
         {listoParaDespachar && (
           <>
             <button
@@ -425,7 +437,6 @@ export default function AsignarViaje() {
         )}
       </div>
 
-      {/* Mensajes al usuario */}
       {!!mensaje && <p className="mt-2 text-red-600">{mensaje}</p>}
       {!!despachoMsg && (
         <p className={`mt-2 ${despachoMsg.startsWith('¡') ? 'text-emerald-700' : 'text-red-600'}`}>
