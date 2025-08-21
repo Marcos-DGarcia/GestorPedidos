@@ -7,11 +7,12 @@ export const dynamic = 'force-dynamic'
 
 export async function POST(
   _req: NextRequest,
-  { params }: { params: { id: string } }
+   { params }: { params: Promise<{ id: string }> }
 ) {
-  const viajeId = params.id
+ const { id } = await params
   const { searchParams } = new URL(_req.url)
   const choferId = searchParams.get('choferId') || undefined
+  const viajeId = id
   if (!viajeId) return NextResponse.json({ error: 'viajeId faltante' }, { status: 400 })
 
   // ¿Ya hay link?
