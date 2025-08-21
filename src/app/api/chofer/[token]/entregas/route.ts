@@ -7,9 +7,10 @@ export const dynamic = 'force-dynamic'
 
 export async function GET(
   _req: NextRequest,
-  { params }: { params: { token: string } }
+    { params }: { params: Promise<{ token: string }> }
 ) {
-  const token = params.token
+  const { token } = await params
+
   if (!token) return NextResponse.json({ error: 'Token requerido' }, { status: 400 })
 
   // 1) Validar token
