@@ -2,107 +2,273 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { supabase } from '@/lib/supabaseClient'
 import Link from 'next/link'
+import { supabase } from '@/lib/supabaseClient'
+
+type Estado = 'programado' | 'asignado' | 'realizado' | 'cancelado'
+type Orden = 'desc' | 'asc'
+
+type Viaje = {
+  id: string
+  descripcion: string
+  fecha_programada: string
+  estado: Estado | string
+  solicitud?: {
+    cliente_id: string
+    cliente_nombre: string
+  } | null
+  asignaciones: Array<{
+    id: string
+    vehiculo_patente?: string
+    vehiculo_desc?: string
+    chofer_nombre?: string
+  }>
+}
+
+type Cliente = { id: string; nombre: string }
+
+const asId = (v: unknown) => String(v ?? '')
+const asStr = (v: unknown) => String(v ?? '')
 
 export default function ListaViajes() {
-  const [viajes, setViajes] = useState<any[]>([])
-  const [filtroEstado, setFiltroEstado] = useState('todos')
+  const [viajes, setViajes] = useState<Viaje[]>([])
+  const [clientes, setClientes] = useState<Cliente[]>([])
+  const [clientesMap, setClientesMap] = useState<Record<string, string>>({})
 
-  useEffect(() => {
-    const fetchViajes = async () => {
-      let query = supabase
-        .from('viajes')
-        .select(`
-          *,
-          solicitudes (
-            descripcion,
-            cliente_id,
-            clientes (nombre)
-          ),
-          vehiculos_asignados (
-            id,
-            vehiculos (patente, descripcion),
-            choferes (nombre)
-          )
-        `)
-        .order('fecha_programada', { ascending: false })
+  const [filtroEstado, setFiltroEstado] = useState<'' | Estado>('') // '' = todos
+  const [clienteFiltroId, setClienteFiltroId] = useState<string>('') // '' = todos
+  const [orden, setOrden] = useState<Orden>('desc') // desc = más recientes
 
+  const [loading, setLoading] = useState(false)
+  const [errorMsg, setErrorMsg] = useState<string | null>(null)
 
-      if (filtroEstado !== 'todos') {
-        query = query.eq('estado', filtroEstado)
-      }
+  // --- Clientes para filtro ---
+  const fetchClientes = async () => {
+    const { data, error } = await supabase
+      .from('clientes')
+      .select('id, nombre')
+      .order('nombre', { ascending: true })
 
-      const { data, error } = await query
-
-      if (error) {
-        console.error('Error al traer viajes:', error)
-      } else {
-        setViajes(data)
-      }
+    if (error) {
+      console.error('Error clientes:', error)
+      setClientes([])
+      setClientesMap({})
+      return
     }
 
+    const rows = (data ?? []) as Array<{ id: unknown; nombre: unknown }>
+    const safe: Cliente[] = rows
+      .map(r => ({ id: asId(r.id), nombre: asStr(r.nombre) }))
+      .filter(c => c.id && c.nombre)
+
+    setClientes(safe)
+    const map: Record<string, string> = {}
+    for (const c of safe) map[c.id] = c.nombre
+    setClientesMap(map)
+  }
+
+  // --- Viajes con filtros/orden ---
+  const fetchViajes = async () => {
+    setLoading(true)
+    setErrorMsg(null)
+
+    // Query base (sin filtrar por cliente del usuario; esto es Operaciones)
+    let q = supabase
+      .from('viajes')
+      .select(`
+        id,
+        descripcion,
+        fecha_programada,
+        estado,
+        solicitudes:solicitudes (
+          cliente_id,
+          clientes ( nombre )
+        ),
+        vehiculos_asignados (
+          id,
+          vehiculos ( patente, descripcion ),
+          choferes ( nombre )
+        )
+      `)
+
+    if (filtroEstado) q = q.eq('estado', filtroEstado)
+    if (clienteFiltroId) q = q.eq('solicitudes.cliente_id', clienteFiltroId)
+
+    q = q.order('fecha_programada', { ascending: orden === 'asc' })
+
+    const { data, error } = await q
+    if (error) {
+      console.error('Error viajes:', error)
+      setErrorMsg('Error al traer viajes.')
+      setViajes([])
+      setLoading(false)
+      return
+    }
+
+    // Normalización fuerte
+    type Row = {
+      id: unknown
+      descripcion?: unknown
+      fecha_programada?: unknown
+      estado?: unknown
+      solicitudes?: {
+        cliente_id?: unknown
+        clientes?: { nombre?: unknown } | null
+      } | null
+      vehiculos_asignados?: Array<{
+        id?: unknown
+        vehiculos?: { patente?: unknown; descripcion?: unknown } | null
+        choferes?: { nombre?: unknown } | null
+      }>
+    }
+
+    const rows = ((data ?? []) as Row[])
+
+
+    const safe: Viaje[] = rows.map(r => ({
+      id: asId(r.id),
+      descripcion: asStr(r.descripcion),
+      fecha_programada: asStr(r.fecha_programada),
+      estado: asStr(r.estado),
+      solicitud: r.solicitudes
+        ? {
+            cliente_id: asId(r.solicitudes.cliente_id),
+            cliente_nombre: asStr(r.solicitudes.clientes?.nombre),
+          }
+        : null,
+      asignaciones: (r.vehiculos_asignados ?? []).map(a => ({
+        id: asId(a.id),
+        vehiculo_patente: a.vehiculos?.patente ? asStr(a.vehiculos.patente) : undefined,
+        vehiculo_desc: a.vehiculos?.descripcion ? asStr(a.vehiculos.descripcion) : undefined,
+        chofer_nombre: a.choferes?.nombre ? asStr(a.choferes.nombre) : undefined,
+      })),
+    }))
+
+    setViajes(safe)
+    setLoading(false)
+  }
+
+  useEffect(() => {
+    fetchClientes()
+  }, [])
+
+  useEffect(() => {
     fetchViajes()
-  }, [filtroEstado])
+  }, [filtroEstado, clienteFiltroId, orden])
 
   return (
     <div className="p-6">
-      <h1 className="text-2xl font-bold mb-4">Viajes programados</h1>
+      <h1 className="text-2xl font-bold mb-4">Viajes programados (Operaciones)</h1>
 
-      <div className="mb-4">
-        <label className="mr-2">Filtrar por estado:</label>
-        <select
-          value={filtroEstado}
-          onChange={(e) => setFiltroEstado(e.target.value)}
-          className="border p-2 rounded"
+      {/* Filtros */}
+      <div className="flex flex-col sm:flex-row gap-3 mb-4">
+        <label className="flex items-center gap-2">
+          <span className="text-sm text-gray-600">Estado:</span>
+          <select
+            value={filtroEstado}
+            onChange={(e) => setFiltroEstado(e.target.value as '' | Estado)}
+            className="border p-2 rounded"
+          >
+            <option value="">Todos</option>
+            <option value="programado">Programado</option>
+            <option value="asignado">Asignado</option>
+            <option value="realizado">Realizado</option>
+            <option value="cancelado">Cancelado</option>
+          </select>
+        </label>
+
+        <label className="flex items-center gap-2">
+          <span className="text-sm text-gray-600">Cliente:</span>
+          <select
+            value={clienteFiltroId}
+            onChange={(e) => setClienteFiltroId(e.target.value)}
+            className="border p-2 rounded min-w-[220px]"
+          >
+            <option value="">Todos</option>
+            {clientes.map(c => (
+              <option key={c.id} value={c.id}>{c.nombre}</option>
+            ))}
+          </select>
+        </label>
+
+        <label className="flex items-center gap-2">
+          <span className="text-sm text-gray-600">Orden:</span>
+          <select
+            value={orden}
+            onChange={(e) => setOrden(e.target.value as Orden)}
+            className="border p-2 rounded"
+          >
+            <option value="desc">Más recientes</option>
+            <option value="asc">Más antiguos</option>
+          </select>
+        </label>
+
+        <button
+          onClick={() => {
+            setFiltroEstado('')
+            setClienteFiltroId('')
+            setOrden('desc')
+          }}
+          className="border px-3 py-2 rounded hover:bg-gray-50"
+          title="Limpiar filtros"
         >
-          <option value="todos">Todos</option>
-          <option value="programado">Programado</option>
-          <option value="asignado">Asignado</option>
-          <option value="realizado">Realizado</option>
-          <option value="cancelado">Cancelado</option>
-        </select>
+          Limpiar filtros
+        </button>
       </div>
 
-      <div className="space-y-4">
-        {viajes.map((viaje) => (
-          <div key={viaje.id} className="p-4 border rounded shadow">
-            <div className="flex justify-between items-center">
-              <div>
-                <p><strong>Fecha:</strong> {viaje.fecha_programada}</p>
-                <p><strong>Cliente:</strong> {viaje.solicitudes?.clientes?.nombre || 'Sin nombre'}</p>
-                <p><strong>Descripción:</strong> {viaje.descripcion}</p>
-                <p>
-                  <strong>Estado:</strong>{' '}
-                  <span className={`px-2 py-1 rounded text-white ${getEstadoColor(viaje.estado)}`}>
-                    {viaje.estado}
-                  </span>
-                </p>
-                {viaje.vehiculos_asignados?.length > 0 && (
-                  <div className="mt-2">
-                    <p><strong>Chofer:</strong> {viaje.vehiculos_asignados[0]?.choferes?.nombre || '—'}</p>
-                    <p><strong>Vehículos:</strong></p>
-                    <ul className="list-disc list-inside ml-4 text-sm">
-                      {viaje.vehiculos_asignados.map((a: any) => (
-                        <li key={a.id}>
-                          {a.vehiculos?.patente} - {a.vehiculos?.descripcion}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
+      {loading && <p>Cargando…</p>}
+      {errorMsg && <p className="text-red-600">{errorMsg}</p>}
 
+      {/* Listado */}
+      {!loading && !errorMsg && (
+        <div className="space-y-4">
+          {viajes.map((viaje) => (
+            <div key={viaje.id} className="p-4 border rounded shadow">
+              <div className="flex justify-between items-start gap-4">
+                <div>
+                  <p><strong>Fecha:</strong> {viaje.fecha_programada}</p>
+                  <p><strong>Cliente:</strong> {viaje.solicitud?.cliente_nombre || '—'}</p>
+                  <p><strong>Descripción:</strong> {viaje.descripcion || '—'}</p>
+                  <p className="mt-1">
+                    <strong>Estado:</strong>{' '}
+                    <span className={`px-2 py-1 rounded text-white ${getEstadoColor(viaje.estado)}`}>
+                      {viaje.estado}
+                    </span>
+                  </p>
+
+                  {viaje.asignaciones.length > 0 && (
+                    <div className="mt-2">
+                      <p><strong>Chofer:</strong> {viaje.asignaciones[0]?.chofer_nombre || '—'}</p>
+                      <p><strong>Vehículos:</strong></p>
+                      <ul className="list-disc list-inside ml-4 text-sm">
+                        {viaje.asignaciones.map(a => (
+                          <li key={a.id}>
+                            {a.vehiculo_patente || '—'}
+                            {a.vehiculo_desc ? ` - ${a.vehiculo_desc}` : ''}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+
+                <Link
+                  href={`/operaciones/viajes/${viaje.id}`}
+                  className="text-blue-600 underline whitespace-nowrap"
+                >
+                  Asignar chofer y vehículo
+                </Link>
               </div>
-              <Link
-                href={`/operaciones/viajes/${viaje.id}`}
-                className="text-blue-600 underline"
-              >
-                Asignar chofer y vehículo
-              </Link>
             </div>
-          </div>
-        ))}
-      </div>
+          ))}
+
+          {viajes.length === 0 && (
+            <div className="border rounded p-4 text-center text-gray-500 italic">
+              No hay viajes con los filtros actuales.
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }
@@ -112,11 +278,11 @@ function getEstadoColor(estado: string) {
     case 'programado':
       return 'bg-yellow-500'
     case 'asignado':
-      return 'bg-blue-500'
+      return 'bg-blue-600'
     case 'realizado':
       return 'bg-green-600'
     case 'cancelado':
-      return 'bg-red-500'
+      return 'bg-red-600'
     default:
       return 'bg-gray-500'
   }
