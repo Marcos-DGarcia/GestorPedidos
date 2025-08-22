@@ -1,3 +1,4 @@
+// app/operaciones/solicitudes/page.tsx
 'use client'
 
 import { useEffect, useState } from 'react'
@@ -19,7 +20,9 @@ type Solicitud = {
 }
 
 type Cliente = { id: string; nombre: string }
+
 const asId = (v: unknown) => String(v ?? '')
+const asStr = (v: unknown) => String(v ?? '')
 
 export default function SolicitudesOperacionesPage() {
   const [solicitudes, setSolicitudes] = useState<Solicitud[]>([])
@@ -33,7 +36,7 @@ export default function SolicitudesOperacionesPage() {
   const [loading, setLoading] = useState(false)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
 
-  // Traer clientes para el filtro
+  // -------- Helpers de Data --------
   const fetchClientes = async () => {
     const { data, error } = await supabase
       .from('clientes')
@@ -49,7 +52,7 @@ export default function SolicitudesOperacionesPage() {
 
     const rows = (data ?? []) as Array<{ id: unknown; nombre: unknown }>
     const safe: Cliente[] = rows
-      .map((r) => ({ id: asId(r.id), nombre: String(r.nombre ?? '') }))
+      .map((r) => ({ id: asId(r.id), nombre: asStr(r.nombre) }))
       .filter((c) => c.id && c.nombre)
 
     setClientes(safe)
@@ -58,7 +61,6 @@ export default function SolicitudesOperacionesPage() {
     setClientesMap(map)
   }
 
-  // Traer solicitudes con filtros/orden
   const fetchSolicitudes = async () => {
     setLoading(true)
     setErrorMsg(null)
@@ -74,6 +76,7 @@ export default function SolicitudesOperacionesPage() {
 
     const { data, error } = await q
     if (error) {
+      console.error('Error solicitudes:', error)
       setErrorMsg('Error al cargar solicitudes.')
       setSolicitudes([])
       setLoading(false)
@@ -92,16 +95,16 @@ export default function SolicitudesOperacionesPage() {
 
     const safe: Solicitud[] = rows
       .map((r) => {
-        const tipoRaw = String(r.tipo ?? 'punto_a_punto')
+        const tipoRaw = asStr(r.tipo)
         const tipo: TipoSolicitud = tipoRaw === 'reparto' ? 'reparto' : 'punto_a_punto'
         return {
           id: asId(r.id),
-          fecha_necesaria: String(r.fecha_necesaria ?? ''),
-          descripcion: String(r.descripcion ?? ''),
+          fecha_necesaria: asStr(r.fecha_necesaria),
+          descripcion: asStr(r.descripcion),
           tipo,
-          estado: String(r.estado ?? ''),
+          estado: asStr(r.estado),
           cliente_id: asId(r.cliente_id),
-          archivo_adjunto: r.archivo_adjunto ? String(r.archivo_adjunto) : null,
+          archivo_adjunto: r.archivo_adjunto ? asStr(r.archivo_adjunto) : null,
         }
       })
       .filter((s) => s.id)
@@ -110,6 +113,28 @@ export default function SolicitudesOperacionesPage() {
     setLoading(false)
   }
 
+  // -------- Acciones --------
+  const cancelarSolicitud = async (id: string) => {
+    const ok = window.confirm('¿Seguro que querés cancelar esta solicitud?')
+    if (!ok) return
+
+    setLoading(true)
+    setErrorMsg(null)
+    const { error } = await supabase
+      .from('solicitudes')
+      .update({ estado: 'cancelado' })
+      .eq('id', id)
+
+    if (error) {
+      console.error('Error al cancelar:', error)
+      setErrorMsg('No se pudo cancelar la solicitud.')
+      setLoading(false)
+      return
+    }
+    await fetchSolicitudes()
+  }
+
+  // -------- Ciclo de vida --------
   useEffect(() => {
     fetchClientes()
   }, [])
@@ -118,6 +143,7 @@ export default function SolicitudesOperacionesPage() {
     fetchSolicitudes()
   }, [estadoFiltro, clienteFiltroId, orden])
 
+  // -------- UI --------
   return (
     <div className="p-6">
       <div className="flex justify-between items-center mb-4">
@@ -202,35 +228,59 @@ export default function SolicitudesOperacionesPage() {
               <th className="border p-2">Tipo</th>
               <th className="border p-2">Estado</th>
               <th className="border p-2">Archivo</th>
+              <th className="border p-2 w-48">Acciones</th>
             </tr>
           </thead>
           <tbody>
-            {solicitudes.map((s) => (
-              <tr key={s.id}>
-                <td className="border p-2">{s.fecha_necesaria}</td>
-                <td className="border p-2">{clientesMap[s.cliente_id] || '—'}</td>
-                <td className="border p-2">{s.descripcion}</td>
-                <td className="border p-2">{s.tipo}</td>
-                <td className="border p-2 capitalize">{s.estado}</td>
-                <td className="border p-2 text-center">
-                  {s.archivo_adjunto ? (
-                    <a
-                      href={s.archivo_adjunto}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-block bg-gray-100 px-2 py-1 rounded text-blue-700 hover:underline"
-                    >
-                      📎 Ver archivo
-                    </a>
-                  ) : (
-                    <span className="text-gray-500 italic">Sin archivo</span>
-                  )}
-                </td>
-              </tr>
-            ))}
+            {solicitudes.map((s) => {
+              const puedeCancelar = s.estado === 'pendiente' || s.estado === 'confirmado'
+              return (
+                <tr key={s.id} className="hover:bg-gray-50">
+                  <td className="border p-2">{s.fecha_necesaria}</td>
+                  <td className="border p-2">{clientesMap[s.cliente_id] || '—'}</td>
+                  <td className="border p-2">{s.descripcion}</td>
+                  <td className="border p-2">{s.tipo}</td>
+                  <td className="border p-2 capitalize">{s.estado}</td>
+                  <td className="border p-2 text-center">
+                    {s.archivo_adjunto ? (
+                      <a
+                        href={s.archivo_adjunto}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-block bg-gray-100 px-2 py-1 rounded text-blue-700 hover:underline"
+                      >
+                        📎 Ver archivo
+                      </a>
+                    ) : (
+                      <span className="text-gray-500 italic">Sin archivo</span>
+                    )}
+                  </td>
+                  <td className="border p-2">
+                    <div className="flex gap-2">
+                      <Link
+                        href={`/operaciones/solicitudes/${s.id}`}
+                        className="px-3 py-1 rounded bg-blue-600 text-white hover:bg-blue-700"
+                        title="Ver / gestionar solicitud"
+                      >
+                        Ver
+                      </Link>
+                      {puedeCancelar && (
+                        <button
+                          onClick={() => cancelarSolicitud(s.id)}
+                          className="px-3 py-1 rounded bg-red-600 text-white hover:bg-red-700"
+                          title="Cancelar solicitud"
+                        >
+                          Cancelar
+                        </button>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              )
+            })}
             {solicitudes.length === 0 && (
               <tr>
-                <td colSpan={6} className="border p-4 text-center text-gray-500 italic">
+                <td colSpan={7} className="border p-4 text-center text-gray-500 italic">
                   No hay solicitudes.
                 </td>
               </tr>

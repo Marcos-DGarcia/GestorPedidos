@@ -1,21 +1,21 @@
-// panel_viajes.tsx
+// app/operaciones/viajes/page.tsx
 'use client'
 
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { supabase } from '@/lib/supabaseClient'
 
-type Estado = 'programado' | 'asignado' | 'realizado' | 'cancelado'
+type EstadoDB = 'programado' | 'en_progreso' | 'completado' | 'cancelado'
 type Orden = 'desc' | 'asc'
 
 type Viaje = {
   id: string
   descripcion: string
   fecha_programada: string
-  estado: Estado | string
+  estado: EstadoDB | string
   solicitud?: {
     cliente_id: string
-    cliente_nombre: string
+    cliente_nombre: string // lo resolvemos desde clientesMap (fallback si no viene del join)
   } | null
   asignaciones: Array<{
     id: string
@@ -35,9 +35,9 @@ export default function ListaViajes() {
   const [clientes, setClientes] = useState<Cliente[]>([])
   const [clientesMap, setClientesMap] = useState<Record<string, string>>({})
 
-  const [filtroEstado, setFiltroEstado] = useState<'' | Estado>('') // '' = todos
-  const [clienteFiltroId, setClienteFiltroId] = useState<string>('') // '' = todos
-  const [orden, setOrden] = useState<Orden>('desc') // desc = más recientes
+  const [filtroEstado, setFiltroEstado] = useState<'' | EstadoDB>('') // '' = todos
+  const [clienteFiltroId, setClienteFiltroId] = useState<string>('')   // '' = todos
+  const [orden, setOrden] = useState<Orden>('desc')                    // desc = más recientes
 
   const [loading, setLoading] = useState(false)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
@@ -68,85 +68,84 @@ export default function ListaViajes() {
   }
 
   // --- Viajes con filtros/orden ---
-  // --- Viajes con filtros/orden ---
-const fetchViajes = async () => {
-  setLoading(true)
-  setErrorMsg(null)
+  const fetchViajes = async () => {
+    setLoading(true)
+    setErrorMsg(null)
 
-  let q = supabase
-    .from('viajes')
-    .select(`
-      id,
-      descripcion,
-      fecha_programada,
-      estado,
-      solicitudes:solicitudes (
-        cliente_id,
-        clientes ( nombre )
-      ),
-      vehiculos_asignados (
+    let q = supabase
+      .from('viajes')
+      .select(`
         id,
-        vehiculos ( patente, descripcion ),
-        choferes ( nombre )
-      )
-    `)
+        descripcion,
+        fecha_programada,
+        estado,
+        solicitudes:solicitudes (
+          cliente_id
+        ),
+        vehiculos_asignados (
+          id,
+          vehiculos ( patente, descripcion ),
+          choferes ( nombre )
+        )
+      `)
 
-  if (filtroEstado) q = q.eq('estado', filtroEstado)
-  if (clienteFiltroId) q = q.eq('solicitudes.cliente_id', clienteFiltroId)
-  q = q.order('fecha_programada', { ascending: orden === 'asc' })
+    if (filtroEstado) q = q.eq('estado', filtroEstado)
+    if (clienteFiltroId) q = q.eq('solicitudes.cliente_id', clienteFiltroId)
 
-  // ⬇️ Tipamos el retorno del select (evita el cast que rompía el build)
-  type RowDB = {
-    id: unknown
-    descripcion?: unknown
-    fecha_programada?: unknown
-    estado?: unknown
-    solicitudes?: {
-      cliente_id?: unknown
-      clientes?: { nombre?: unknown } | null
-    } | null
-    vehiculos_asignados?: Array<{
-      id?: unknown
-      vehiculos?: { patente?: unknown; descripcion?: unknown } | null
-      choferes?: { nombre?: unknown } | null
-    }>
-  }
+    q = q.order('fecha_programada', { ascending: orden === 'asc' })
 
-  const { data, error } = await q.returns<RowDB[]>()
+    type RowDB = {
+      id: unknown
+      descripcion?: unknown
+      fecha_programada?: unknown
+      estado?: unknown
+      solicitudes?: {
+        cliente_id?: unknown
+      } | null
+      vehiculos_asignados?: Array<{
+        id?: unknown
+        vehiculos?: { patente?: unknown; descripcion?: unknown } | null
+        choferes?: { nombre?: unknown } | null
+      }>
+    }
 
-  if (error) {
-    console.error('Error viajes:', error)
-    setErrorMsg('Error al traer viajes.')
-    setViajes([])
+    const { data, error } = await q.returns<RowDB[]>()
+
+    if (error) {
+      console.error('Error viajes:', error)
+      setErrorMsg('Error al traer viajes.')
+      setViajes([])
+      setLoading(false)
+      return
+    }
+
+    const rows = data ?? []
+
+    const safe: Viaje[] = rows.map(r => {
+      const cliente_id = asId(r.solicitudes?.cliente_id)
+      return {
+        id: asId(r.id),
+        descripcion: asStr(r.descripcion),
+        fecha_programada: asStr(r.fecha_programada),
+        estado: asStr(r.estado),
+        solicitud: r.solicitudes
+          ? {
+              cliente_id,
+              cliente_nombre: clientesMap[cliente_id] || '', // lo resolvemos en render si falta
+            }
+          : null,
+        asignaciones: (r.vehiculos_asignados ?? []).map(a => ({
+          id: asId(a.id),
+          vehiculo_patente: a.vehiculos?.patente ? asStr(a.vehiculos.patente) : undefined,
+          vehiculo_desc: a.vehiculos?.descripcion ? asStr(a.vehiculos.descripcion) : undefined,
+          chofer_nombre: a.choferes?.nombre ? asStr(a.choferes.nombre) : undefined,
+        })),
+      }
+    })
+
+    setViajes(safe)
     setLoading(false)
-    return
   }
-
-  const rows = data ?? []
-
-  const safe: Viaje[] = rows.map(r => ({
-    id: asId(r.id),
-    descripcion: asStr(r.descripcion),
-    fecha_programada: asStr(r.fecha_programada),
-    estado: asStr(r.estado),
-    solicitud: r.solicitudes
-      ? {
-          cliente_id: asId(r.solicitudes.cliente_id),
-          cliente_nombre: asStr(r.solicitudes.clientes?.nombre),
-        }
-      : null,
-    asignaciones: (r.vehiculos_asignados ?? []).map(a => ({
-      id: asId(a.id),
-      vehiculo_patente: a.vehiculos?.patente ? asStr(a.vehiculos.patente) : undefined,
-      vehiculo_desc: a.vehiculos?.descripcion ? asStr(a.vehiculos.descripcion) : undefined,
-      chofer_nombre: a.choferes?.nombre ? asStr(a.choferes.nombre) : undefined,
-    })),
-  }))
-
-  setViajes(safe)
-  setLoading(false)
-}
-
 
   useEffect(() => {
     fetchClientes()
@@ -154,11 +153,11 @@ const fetchViajes = async () => {
 
   useEffect(() => {
     fetchViajes()
-  }, [filtroEstado, clienteFiltroId, orden])
+  }, [filtroEstado, clienteFiltroId, orden, clientesMap]) // si cambia el map, refrescamos nombres
 
   return (
     <div className="p-6">
-      <h1 className="text-2xl font-bold mb-4">Viajes programados (Operaciones)</h1>
+      <h1 className="text-2xl font-bold mb-4">Viajes (Operaciones)</h1>
 
       {/* Filtros */}
       <div className="flex flex-col sm:flex-row gap-3 mb-4">
@@ -166,13 +165,13 @@ const fetchViajes = async () => {
           <span className="text-sm text-gray-600">Estado:</span>
           <select
             value={filtroEstado}
-            onChange={(e) => setFiltroEstado(e.target.value as '' | Estado)}
+            onChange={(e) => setFiltroEstado(e.target.value as '' | EstadoDB)}
             className="border p-2 rounded"
           >
             <option value="">Todos</option>
             <option value="programado">Programado</option>
-            <option value="asignado">Asignado</option>
-            <option value="realizado">Realizado</option>
+            <option value="en_progreso">En progreso</option>
+            <option value="completado">Completado</option>
             <option value="cancelado">Cancelado</option>
           </select>
         </label>
@@ -226,13 +225,13 @@ const fetchViajes = async () => {
             <div key={viaje.id} className="p-4 border rounded shadow">
               <div className="flex justify-between items-start gap-4">
                 <div>
-                  <p><strong>Fecha:</strong> {viaje.fecha_programada}</p>
-                  <p><strong>Cliente:</strong> {viaje.solicitud?.cliente_nombre || '—'}</p>
+                  <p><strong>Fecha:</strong> {viaje.fecha_programada || '—'}</p>
+                  <p><strong>Cliente:</strong> {viaje.solicitud?.cliente_nombre || clientesMap[viaje.solicitud?.cliente_id || ''] || '—'}</p>
                   <p><strong>Descripción:</strong> {viaje.descripcion || '—'}</p>
                   <p className="mt-1">
                     <strong>Estado:</strong>{' '}
                     <span className={`px-2 py-1 rounded text-white ${getEstadoColor(viaje.estado)}`}>
-                      {viaje.estado}
+                      {toNiceEstado(viaje.estado)}
                     </span>
                   </p>
 
@@ -273,13 +272,23 @@ const fetchViajes = async () => {
   )
 }
 
+function toNiceEstado(estado: string) {
+  switch (estado) {
+    case 'programado': return 'Programado'
+    case 'en_progreso': return 'En progreso'
+    case 'completado': return 'Completado'
+    case 'cancelado': return 'Cancelado'
+    default: return estado
+  }
+}
+
 function getEstadoColor(estado: string) {
   switch (estado) {
     case 'programado':
       return 'bg-yellow-500'
-    case 'asignado':
+    case 'en_progreso':
       return 'bg-blue-600'
-    case 'realizado':
+    case 'completado':
       return 'bg-green-600'
     case 'cancelado':
       return 'bg-red-600'
