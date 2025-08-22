@@ -15,7 +15,7 @@ type Viaje = {
   estado: EstadoDB | string
   solicitud?: {
     cliente_id: string
-    cliente_nombre: string // lo resolvemos desde clientesMap (fallback si no viene del join)
+    cliente_nombre: string
   } | null
   asignaciones: Array<{
     id: string
@@ -35,9 +35,9 @@ export default function ListaViajes() {
   const [clientes, setClientes] = useState<Cliente[]>([])
   const [clientesMap, setClientesMap] = useState<Record<string, string>>({})
 
-  const [filtroEstado, setFiltroEstado] = useState<'' | EstadoDB>('') // '' = todos
-  const [clienteFiltroId, setClienteFiltroId] = useState<string>('')   // '' = todos
-  const [orden, setOrden] = useState<Orden>('desc')                    // desc = más recientes
+  const [filtroEstado, setFiltroEstado] = useState<'' | EstadoDB>('')
+  const [clienteFiltroId, setClienteFiltroId] = useState<string>('') // '' = todos
+  const [orden, setOrden] = useState<Orden>('desc')
 
   const [loading, setLoading] = useState(false)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
@@ -51,8 +51,7 @@ export default function ListaViajes() {
 
     if (error) {
       console.error('Error clientes:', error)
-      setClientes([])
-      setClientesMap({})
+      setClientes([]); setClientesMap({})
       return
     }
 
@@ -72,22 +71,28 @@ export default function ListaViajes() {
     setLoading(true)
     setErrorMsg(null)
 
-    let q = supabase
-      .from('viajes')
-      .select(`
-        id,
-        descripcion,
-        fecha_programada,
-        estado,
-        solicitudes:solicitudes (
-          cliente_id
-        ),
+    // Si hay filtro por cliente, forzamos INNER JOIN con solicitudes
+    const selectStr = clienteFiltroId
+      ? `
+        id, descripcion, fecha_programada, estado,
+        solicitudes:solicitudes!inner ( cliente_id ),
         vehiculos_asignados (
           id,
           vehiculos ( patente, descripcion ),
           choferes ( nombre )
         )
-      `)
+      `
+      : `
+        id, descripcion, fecha_programada, estado,
+        solicitudes:solicitudes ( cliente_id ),
+        vehiculos_asignados (
+          id,
+          vehiculos ( patente, descripcion ),
+          choferes ( nombre )
+        )
+      `
+
+    let q = supabase.from('viajes').select(selectStr)
 
     if (filtroEstado) q = q.eq('estado', filtroEstado)
     if (clienteFiltroId) q = q.eq('solicitudes.cliente_id', clienteFiltroId)
@@ -99,9 +104,7 @@ export default function ListaViajes() {
       descripcion?: unknown
       fecha_programada?: unknown
       estado?: unknown
-      solicitudes?: {
-        cliente_id?: unknown
-      } | null
+      solicitudes?: { cliente_id?: unknown } | null
       vehiculos_asignados?: Array<{
         id?: unknown
         vehiculos?: { patente?: unknown; descripcion?: unknown } | null
@@ -110,17 +113,14 @@ export default function ListaViajes() {
     }
 
     const { data, error } = await q.returns<RowDB[]>()
-
     if (error) {
       console.error('Error viajes:', error)
       setErrorMsg('Error al traer viajes.')
-      setViajes([])
-      setLoading(false)
+      setViajes([]); setLoading(false)
       return
     }
 
     const rows = data ?? []
-
     const safe: Viaje[] = rows.map(r => {
       const cliente_id = asId(r.solicitudes?.cliente_id)
       return {
@@ -129,10 +129,7 @@ export default function ListaViajes() {
         fecha_programada: asStr(r.fecha_programada),
         estado: asStr(r.estado),
         solicitud: r.solicitudes
-          ? {
-              cliente_id,
-              cliente_nombre: clientesMap[cliente_id] || '', // lo resolvemos en render si falta
-            }
+          ? { cliente_id, cliente_nombre: clientesMap[cliente_id] || '' }
           : null,
         asignaciones: (r.vehiculos_asignados ?? []).map(a => ({
           id: asId(a.id),
@@ -147,13 +144,8 @@ export default function ListaViajes() {
     setLoading(false)
   }
 
-  useEffect(() => {
-    fetchClientes()
-  }, [])
-
-  useEffect(() => {
-    fetchViajes()
-  }, [filtroEstado, clienteFiltroId, orden, clientesMap]) // si cambia el map, refrescamos nombres
+  useEffect(() => { fetchClientes() }, [])
+  useEffect(() => { fetchViajes() }, [filtroEstado, clienteFiltroId, orden, clientesMap])
 
   return (
     <div className="p-6">
@@ -203,11 +195,7 @@ export default function ListaViajes() {
         </label>
 
         <button
-          onClick={() => {
-            setFiltroEstado('')
-            setClienteFiltroId('')
-            setOrden('desc')
-          }}
+          onClick={() => { setFiltroEstado(''); setClienteFiltroId(''); setOrden('desc') }}
           className="border px-3 py-2 rounded hover:bg-gray-50"
           title="Limpiar filtros"
         >
@@ -218,7 +206,6 @@ export default function ListaViajes() {
       {loading && <p>Cargando…</p>}
       {errorMsg && <p className="text-red-600">{errorMsg}</p>}
 
-      {/* Listado */}
       {!loading && !errorMsg && (
         <div className="space-y-4">
           {viajes.map((viaje) => (
@@ -284,15 +271,10 @@ function toNiceEstado(estado: string) {
 
 function getEstadoColor(estado: string) {
   switch (estado) {
-    case 'programado':
-      return 'bg-yellow-500'
-    case 'en_progreso':
-      return 'bg-blue-600'
-    case 'completado':
-      return 'bg-green-600'
-    case 'cancelado':
-      return 'bg-red-600'
-    default:
-      return 'bg-gray-500'
+    case 'programado': return 'bg-yellow-500'
+    case 'en_progreso': return 'bg-blue-600'
+    case 'completado': return 'bg-green-600'
+    case 'cancelado': return 'bg-red-600'
+    default: return 'bg-gray-500'
   }
 }
