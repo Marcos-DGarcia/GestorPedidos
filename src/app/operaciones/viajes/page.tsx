@@ -5,14 +5,14 @@ import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { supabase } from '@/lib/supabaseClient'
 
-type EstadoDB = 'programado' | 'en_progreso' | 'completado' | 'cancelado'
+type EstadoDB = 'programado' | 'reservado' | 'asignado' | 'en_progreso' | 'completado' | 'cancelado'
 type Orden = 'desc' | 'asc'
 
 type Viaje = {
   id: string
   descripcion: string
   fecha_programada: string
-  estado: EstadoDB | string
+  estado: string
   solicitud?: {
     cliente_id: string
     cliente_nombre: string
@@ -37,7 +37,7 @@ export default function ListaViajes() {
 
   const [filtroEstado, setFiltroEstado] = useState<'' | EstadoDB>('')
   const [clienteFiltroId, setClienteFiltroId] = useState<string>('') // '' = todos
-  const [orden, setOrden] = useState<Orden>('desc')
+  const [orden, setOrden] = useState<Orden>('desc') // desc = más recientes
 
   const [loading, setLoading] = useState(false)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
@@ -71,26 +71,28 @@ export default function ListaViajes() {
     setLoading(true)
     setErrorMsg(null)
 
-    // Si hay filtro por cliente, forzamos INNER JOIN con solicitudes
-    const selectStr = clienteFiltroId
-      ? `
-        id, descripcion, fecha_programada, estado,
-        solicitudes:solicitudes!inner ( cliente_id ),
-        vehiculos_asignados (
-          id,
-          vehiculos ( patente, descripcion ),
-          choferes ( nombre )
-        )
-      `
-      : `
-        id, descripcion, fecha_programada, estado,
-        solicitudes:solicitudes ( cliente_id ),
-        vehiculos_asignados (
-          id,
-          vehiculos ( patente, descripcion ),
-          choferes ( nombre )
-        )
-      `
+    // si filtrás por cliente, forzamos INNER JOIN en solicitudes
+    const relSolicitudes =
+      clienteFiltroId ? 'solicitudes:solicitudes!inner' : 'solicitudes:solicitudes'
+
+    // ⚠️ Desambiguamos la relación one-to-many para evitar PGRST201
+    // Si en tu DB el FK correcto fuera 'veh_asig_viaje_fk', cambiá la línea de abajo por:
+    // const relVehAsig = 'vehiculos_asignados:vehiculos_asignados!veh_asig_viaje_fk'
+    const relVehAsig =
+      'vehiculos_asignados:vehiculos_asignados!vehiculos_asignados_viaje_id_fkey'
+
+    const selectStr = `
+      id,
+      descripcion,
+      fecha_programada,
+      estado,
+      ${relSolicitudes} ( cliente_id ),
+      ${relVehAsig} (
+        id,
+        vehiculos ( patente, descripcion ),
+        choferes ( nombre )
+      )
+    `
 
     let q = supabase.from('viajes').select(selectStr)
 
@@ -113,10 +115,12 @@ export default function ListaViajes() {
     }
 
     const { data, error } = await q.returns<RowDB[]>()
+
     if (error) {
       console.error('Error viajes:', error)
       setErrorMsg('Error al traer viajes.')
-      setViajes([]); setLoading(false)
+      setViajes([])
+      setLoading(false)
       return
     }
 
@@ -162,12 +166,11 @@ export default function ListaViajes() {
           >
             <option value="">Todos</option>
             <option value="programado">Programado</option>
+            <option value="reservado">Reservado</option>
+            <option value="asignado">Asignado</option>
             <option value="en_progreso">En progreso</option>
             <option value="completado">Completado</option>
             <option value="cancelado">Cancelado</option>
-            <option value="reservado">Reservado</option>
-          <option value="asignado">Asignado</option>
-
           </select>
         </label>
 
@@ -209,6 +212,7 @@ export default function ListaViajes() {
       {loading && <p>Cargando…</p>}
       {errorMsg && <p className="text-red-600">{errorMsg}</p>}
 
+      {/* Listado */}
       {!loading && !errorMsg && (
         <div className="space-y-4">
           {viajes.map((viaje) => (
@@ -262,22 +266,26 @@ export default function ListaViajes() {
   )
 }
 
-function toNiceEstado(e: string){ switch(e){
-  case 'programado': return 'Programado'
-  case 'reservado': return 'Reservado'
-  case 'asignado': return 'Asignado'
-  case 'en_progreso': return 'En progreso'
-  case 'completado': return 'Completado'
-  case 'cancelado': return 'Cancelado'
-  default: return e
-}}
+function toNiceEstado(estado: string) {
+  switch (estado) {
+    case 'programado': return 'Programado'
+    case 'reservado': return 'Reservado'
+    case 'asignado': return 'Asignado'
+    case 'en_progreso': return 'En progreso'
+    case 'completado': return 'Completado'
+    case 'cancelado': return 'Cancelado'
+    default: return estado
+  }
+}
 
-function getEstadoColor(e: string){ switch(e){
-  case 'programado': return 'bg-yellow-500'
-  case 'reservado': return 'bg-amber-600'
-  case 'asignado': return 'bg-indigo-600'
-  case 'en_progreso': return 'bg-blue-600'
-  case 'completado': return 'bg-green-600'
-  case 'cancelado': return 'bg-red-600'
-  default: return 'bg-gray-500'
-}}
+function getEstadoColor(estado: string) {
+  switch (estado) {
+    case 'programado': return 'bg-yellow-500'
+    case 'reservado': return 'bg-amber-600'
+    case 'asignado': return 'bg-indigo-600'
+    case 'en_progreso': return 'bg-blue-600'
+    case 'completado': return 'bg-green-600'
+    case 'cancelado': return 'bg-red-600'
+    default: return 'bg-gray-500'
+  }
+}
