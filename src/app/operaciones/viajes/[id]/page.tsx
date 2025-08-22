@@ -7,32 +7,56 @@ import { supabase } from '@/lib/supabaseClient'
 
 // Helpers
 const asId = (v: unknown) => String(v ?? '')
-const getTipoNombre = (vehiculo: any): string | undefined => {
-  const rel = vehiculo?.tipos_vehiculo
-  if (Array.isArray(rel)) return rel[0]?.nombre
-  return rel?.nombre
+const asStr = (v: unknown) => String(v ?? '')
+
+const getTipoNombre = (vehiculo: VehiculoRow | undefined): string | undefined => {
+  if (!vehiculo) return undefined
+  const rel = vehiculo.tipos_vehiculo
+  return Array.isArray(rel) ? rel[0]?.nombre ?? undefined : rel?.nombre ?? undefined
 }
+
+// Estados de negocio
+type EstadoViaje =
+  | 'programado'
+  | 'reservado'
+  | 'asignado'
+  | 'en_progreso'
+  | 'completado'
+  | 'cancelado'
 
 // Tipos mínimos
 type Asignacion = {
   id: string
   viaje_id: string
   vehiculo_id: string
-  chofer_id: string
+  chofer_id: string | null
   observaciones: string | null
 }
+
+type InsertAsignacion = {
+  viaje_id: string
+  vehiculo_id: string
+  chofer_id: string | null
+  observaciones?: string | null
+}
+
 type VehiculoRow = {
   id: string
   patente?: string | null
   descripcion?: string | null
-  tipos_vehiculo?: { nombre?: string | null } | { nombre?: string | null }[] | null
+  tipos_vehiculo?:
+    | { nombre?: string | null }
+    | { nombre?: string | null }[]
+    | null
 }
+
 type ChoferRow = { id: string; nombre?: string | null }
+
 type ViajeRow = {
   id: string
   descripcion?: string | null
   fecha_programada?: string | null
-  estado?: string | null
+  estado?: EstadoViaje | string | null
   solicitudes?: { clientes?: { nombre?: string | null } | null } | null
 }
 
@@ -75,7 +99,7 @@ export default function AsignarViaje() {
   useEffect(() => {
     const fetchData = async () => {
       try {
-        // Viaje + cliente (solo lectura)
+        // Viaje + cliente
         const { data: viajeData } = await supabase
           .from('viajes')
           .select('id, descripcion, fecha_programada, estado, solicitudes (clientes (nombre))')
@@ -93,13 +117,21 @@ export default function AsignarViaje() {
           .from('choferes')
           .select('id, nombre')
 
-        // Asignaciones (⚠️ sin join)
+        // Asignaciones
+        type RowVA = {
+          id: unknown
+          viaje_id: unknown
+          vehiculo_id: unknown
+          chofer_id: unknown
+          observaciones?: unknown
+        }
         const { data: asignacionesData } = await supabase
           .from('vehiculos_asignados')
           .select('id, viaje_id, vehiculo_id, chofer_id, observaciones')
           .eq('viaje_id', viajeId)
+          .returns<RowVA[]>()
 
-        // Token existente
+        // Token existente (portal chofer)
         const { data: linkData } = await supabase
           .from('viajes_links')
           .select('token')
@@ -110,13 +142,12 @@ export default function AsignarViaje() {
         setVehiculos((vehiculosData ?? []) as VehiculoRow[])
         setChoferes((choferesData ?? []) as ChoferRow[])
 
-        // Normalizar asignaciones -> Asignacion[]
-        const asign: Asignacion[] = (asignacionesData ?? []).map((r: any) => ({
-          id: asId(r?.id),
-          viaje_id: asId(r?.viaje_id),
-          vehiculo_id: asId(r?.vehiculo_id),
-          chofer_id: asId(r?.chofer_id),
-          observaciones: (r?.observaciones ?? null) as string | null,
+        const asign: Asignacion[] = (asignacionesData ?? []).map((r) => ({
+          id: asId(r.id),
+          viaje_id: asId(r.viaje_id),
+          vehiculo_id: asId(r.vehiculo_id),
+          chofer_id: r.chofer_id == null ? null : asId(r.chofer_id),
+          observaciones: r.observaciones == null ? null : asStr(r.observaciones),
         }))
         setAsignaciones(asign)
 
@@ -158,7 +189,7 @@ export default function AsignarViaje() {
 
   const esTractor = () => {
     const v = vehById.get(asId(vehiculoSeleccionado))
-    return getTipoNombre(v)?.toUpperCase() === 'TRACTOR'
+    return (getTipoNombre(v) ?? '').toUpperCase() === 'TRACTOR'
   }
 
   const handleArchivoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -185,26 +216,30 @@ export default function AsignarViaje() {
     }
   }
 
+  // ====== ASIGNAR o RESERVAR ======
   const asignar = async () => {
     setMensaje('')
 
-    if (!vehiculoSeleccionado || !choferSeleccionado) {
-      setMensaje('Debe seleccionar un vehículo y un chofer.')
+    // Se exige al menos vehículo
+    if (!vehiculoSeleccionado) {
+      setMensaje('Debe seleccionar al menos un vehículo.')
       return
     }
+    // Si es tractor, exigir remolque SEMI
     if (esTractor() && !vehiculoRemolque) {
-      setMensaje('Debe seleccionar también un vehículo remolcado.')
+      setMensaje('Debe seleccionar también un vehículo remolcado (SEMI).')
       return
     }
 
     let archivoUrl: string | null = null
     if (archivoDetalle) archivoUrl = await subirArchivoDetalle()
 
-    const asignacionesInsert: Partial<Asignacion>[] = [
+    // armamos filas a insertar
+    const asignacionesInsert: InsertAsignacion[] = [
       {
         viaje_id: viajeId,
         vehiculo_id: asId(vehiculoSeleccionado),
-        chofer_id: asId(choferSeleccionado),
+        chofer_id: choferSeleccionado ? asId(choferSeleccionado) : null,
         observaciones: '',
       },
     ]
@@ -212,7 +247,7 @@ export default function AsignarViaje() {
       asignacionesInsert.push({
         viaje_id: viajeId,
         vehiculo_id: asId(vehiculoRemolque),
-        chofer_id: asId(choferSeleccionado),
+        chofer_id: choferSeleccionado ? asId(choferSeleccionado) : null,
         observaciones: 'Remolque asignado junto a tractor',
       })
     }
@@ -223,50 +258,70 @@ export default function AsignarViaje() {
 
     if (insertError) {
       console.error('Error al asignar:', insertError)
-      setMensaje('Error al asignar vehículo(s) y chofer.')
+      setMensaje('Error al asignar/reservar vehículo(s).')
       return
     }
+
+    // Determinar próximo estado
+    const nextEstado: EstadoViaje = choferSeleccionado ? 'asignado' : 'reservado'
 
     const { error: updateError } = await supabase
       .from('viajes')
       .update({
-        estado: 'asignado',
+        estado: nextEstado,
         ...(archivoUrl ? { archivo_detalle: archivoUrl } : {}),
       })
       .eq('id', viajeId)
 
     if (updateError) {
       console.error('Error al actualizar estado:', updateError)
-      setMensaje('Asignado, pero no se pudo cambiar el estado.')
+      setMensaje('Se guardaron asignaciones, pero no se pudo cambiar el estado.')
     } else {
-      // Refetch asignaciones sin join + normalización
+      // Refetch asignaciones
+      type RowVA = {
+        id: unknown
+        viaje_id: unknown
+        vehiculo_id: unknown
+        chofer_id: unknown
+        observaciones?: unknown
+      }
       const { data: asignacionesData } = await supabase
         .from('vehiculos_asignados')
         .select('id, viaje_id, vehiculo_id, chofer_id, observaciones')
         .eq('viaje_id', viajeId)
+        .returns<RowVA[]>()
 
-      const asign: Asignacion[] = (asignacionesData ?? []).map((r: any) => ({
-        id: asId(r?.id),
-        viaje_id: asId(r?.viaje_id),
-        vehiculo_id: asId(r?.vehiculo_id),
-        chofer_id: asId(r?.chofer_id),
-        observaciones: (r?.observaciones ?? null) as string | null,
+      const asign: Asignacion[] = (asignacionesData ?? []).map((r) => ({
+        id: asId(r.id),
+        viaje_id: asId(r.viaje_id),
+        vehiculo_id: asId(r.vehiculo_id),
+        chofer_id: r.chofer_id == null ? null : asId(r.chofer_id),
+        observaciones: r.observaciones == null ? null : asStr(r.observaciones),
       }))
       setAsignaciones(asign)
 
-      setMensaje('Asignación realizada.')
+      setMensaje(nextEstado === 'asignado' ? 'Asignación completada.' : 'Reserva registrada.')
     }
   }
 
+  // Listo para despachar: debe existir al menos una asignación con vehículo y chofer
   const listoParaDespachar = useMemo(() => {
     if (!asignaciones?.length) return false
-    return asignaciones.some((a) => a.chofer_id && a.vehiculo_id)
+    return asignaciones.some((a) => !!a.chofer_id && !!a.vehiculo_id)
   }, [asignaciones])
 
   const despachar = async (canal: 'whatsapp' | 'sms' = 'whatsapp') => {
     try {
+      // Solo despachar si está asignado (vehículo + chofer)
+      if ((viaje?.estado ?? '') !== 'asignado' && !listoParaDespachar) {
+        setDespachoMsg('Para despachar, el viaje debe estar ASIGNADO (vehículo y chofer).')
+        return
+      }
+
       setEnviando(true)
       setDespachoMsg(null)
+
+      // Llamada a tu API
       const res = await fetch('/api/operaciones/despachar', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -274,7 +329,19 @@ export default function AsignarViaje() {
       })
       const json = await res.json()
       if (!res.ok) throw new Error(json?.error || 'No se pudo despachar el viaje')
-      setDespachoMsg('¡Despachado correctamente!')
+
+      // Si todo ok, avanzamos estado a en_progreso
+      const { error: upErr } = await supabase
+        .from('viajes')
+        .update({ estado: 'en_progreso' })
+        .eq('id', viajeId)
+
+      if (upErr) {
+        setDespachoMsg('Enviado al chofer, pero no se pudo actualizar el estado.')
+      } else {
+        setDespachoMsg('¡Despachado correctamente!')
+        setViaje((v) => (v ? { ...v, estado: 'en_progreso' } : v))
+      }
     } catch (e: any) {
       setDespachoMsg(`Error al despachar: ${e.message}`)
     } finally {
@@ -312,6 +379,14 @@ export default function AsignarViaje() {
       setImportando(false)
     }
   }
+
+  // ====== UI ======
+  const botonAsignarLabel =
+    !vehiculoSeleccionado
+      ? 'Seleccioná un vehículo'
+      : choferSeleccionado
+        ? 'Asignar (vehículo + chofer)'
+        : 'Reservar (solo vehículo)'
 
   return (
     <div className="p-6 space-y-6">
@@ -377,7 +452,7 @@ export default function AsignarViaje() {
 
       {asignaciones.length > 0 && (
         <div>
-          <h3 className="font-semibold mb-1">Vehículos ya asignados:</h3>
+          <h3 className="font-semibold mb-1">Vehículos ya asignados / reservados:</h3>
           <ul className="list-disc list-inside">
             {asignaciones.map((a) => {
               const vv = vehById.get(asId(a.vehiculo_id))
@@ -385,6 +460,7 @@ export default function AsignarViaje() {
                 <li key={a.id}>
                   {vv?.patente ?? '—'} - {vv?.descripcion ?? '—'}{' '}
                   {a.observaciones && `(Obs: ${a.observaciones})`}
+                  {a.chofer_id ? '' : '  (reservado, sin chofer)'}
                 </li>
               )
             })}
@@ -422,7 +498,7 @@ export default function AsignarViaje() {
             >
               <option value="">Seleccione un vehículo</option>
               {vehiculos
-                .filter((v) => asId(v.id) !== asId(vehiculoSeleccionado) && getTipoNombre(v)?.toUpperCase() === 'SEMI')
+                .filter((v) => asId(v.id) !== asId(vehiculoSeleccionado) && (getTipoNombre(v) ?? '').toUpperCase() === 'SEMI')
                 .map((v) => (
                   <option key={asId(v.id)} value={asId(v.id)}>
                     {v.patente} - {v.descripcion}
@@ -439,7 +515,7 @@ export default function AsignarViaje() {
             onChange={(e) => setChoferSeleccionado(e.target.value)}
             className="border p-2 w-full rounded"
           >
-            <option value="">Seleccione un chofer</option>
+            <option value="">Seleccione un chofer (opcional para reservar)</option>
             {choferes.map((c) => (
               <option key={asId(c.id)} value={asId(c.id)}>
                 {c.nombre}
@@ -462,10 +538,11 @@ export default function AsignarViaje() {
       <div className="flex items-center gap-3">
         <button
           onClick={asignar}
-          disabled={subiendoArchivo}
-          className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
+          disabled={subiendoArchivo || !vehiculoSeleccionado}
+          className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 disabled:opacity-50"
+          title="Reservar (vehículo) o Asignar (vehículo + chofer)"
         >
-          {subiendoArchivo ? 'Subiendo archivo...' : 'Asignar'}
+          {subiendoArchivo ? 'Subiendo archivo...' : botonAsignarLabel}
         </button>
 
         {listoParaDespachar && (

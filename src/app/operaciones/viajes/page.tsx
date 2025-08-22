@@ -165,6 +165,9 @@ export default function ListaViajes() {
             <option value="en_progreso">En progreso</option>
             <option value="completado">Completado</option>
             <option value="cancelado">Cancelado</option>
+            <option value="reservado">Reservado</option>
+          <option value="asignado">Asignado</option>
+
           </select>
         </label>
 
@@ -259,22 +262,22 @@ export default function ListaViajes() {
   )
 }
 
-function toNiceEstado(estado: string) {
-  switch (estado) {
-    case 'programado': return 'Programado'
-    case 'en_progreso': return 'En progreso'
-    case 'completado': return 'Completado'
-    case 'cancelado': return 'Cancelado'
-    default: return estado
-  }
-}
+function toNiceEstado(e: string){ switch(e){
+  case 'programado': return 'Programado'
+  case 'reservado': return 'Reservado'
+  case 'asignado': return 'Asignado'
+  case 'en_progreso': return 'En progreso'
+  case 'completado': return 'Completado'
+  case 'cancelado': return 'Cancelado'
+  default: return e
+}}
 
-function getEstadoColor(estado: string) {
-  switch (estado) {
-    case 'programado': return 'bg-yellow-500'
-    case 'en_progreso': return 'bg-blue-600'
-    case 'completado': return 'bg-green-600'
-    case 'cancelado': return 'bg-red-600'
-    default: return 'bg-gray-500'
-  }
-}
+function getEstadoColor(e: string){ switch(e){
+  case 'programado': return 'bg-yellow-500'
+  case 'reservado': return 'bg-amber-600'
+  case 'asignado': return 'bg-indigo-600'
+  case 'en_progreso': return 'bg-blue-600'
+  case 'completado': return 'bg-green-600'
+  case 'cancelado': return 'bg-red-600'
+  default: return 'bg-gray-500'
+}}
