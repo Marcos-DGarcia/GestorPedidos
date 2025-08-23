@@ -1,11 +1,11 @@
-import { NextRequest, NextResponse } from 'next/server'
+import { NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function GET(_req: NextRequest, { params }: { params: { token: string } }) {
-  const token = String(params.token || '').trim()
+export async function GET(_req: Request, context: any) {
+  const token = String(context?.params?.token ?? '').trim()
   if (!token) return NextResponse.json({ error: 'token requerido' }, { status: 400 })
 
   const { data: link, error: linkErr } = await supabaseAdmin

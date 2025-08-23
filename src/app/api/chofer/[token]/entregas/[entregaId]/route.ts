@@ -4,12 +4,8 @@ import { supabaseAdmin } from '@/lib/supabaseAdmin'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function PATCH(
-  req: Request,
-  { params }: { params: { token: string; entregaId: string } }
-) {
-  const token = (params.token || '').trim()
-  const entregaId = params.entregaId || ''
+export async function PATCH(req: Request, context: any) {
+  const { token, entregaId } = (context?.params ?? {}) as { token?: string; entregaId?: string }
   if (!token || !entregaId) {
     return NextResponse.json({ error: 'parámetros inválidos' }, { status: 400 })
   }
@@ -20,7 +16,7 @@ export async function PATCH(
   const { data: link, error: linkErr } = await supabaseAdmin
     .from('viajes_links')
     .select('viaje_id')
-    .eq('token', token)
+    .eq('token', token.trim())
     .maybeSingle()
   if (linkErr) return NextResponse.json({ error: linkErr.message }, { status: 500 })
   if (!link?.viaje_id) return NextResponse.json({ error: 'Link inválido' }, { status: 404 })
@@ -41,10 +37,7 @@ export async function PATCH(
   else if (estado === 'pendiente') { patch.estado_entrega = 'pendiente'; patch.completado_at = null }
 
   if (Object.keys(patch).length) {
-    const { error: upErr } = await supabaseAdmin
-      .from('viajes_entregas')
-      .update(patch)
-      .eq('id', entregaId)
+    const { error: upErr } = await supabaseAdmin.from('viajes_entregas').update(patch).eq('id', entregaId)
     if (upErr) return NextResponse.json({ error: upErr.message }, { status: 500 })
   }
 
