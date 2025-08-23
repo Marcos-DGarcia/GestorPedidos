@@ -17,32 +17,21 @@ type Entrega = {
 }
 
 export default function PortalChoferPage() {
-  const { token } = useParams<{ token: string }>()
+  const params = useParams()
+  const token = typeof params?.token === 'string' ? params.token : ''
   const [items, setItems] = useState<Entrega[] | null>(null)
   const [err, setErr] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
 
   const load = async () => {
+    if (!token) return
     setLoading(true)
     setErr(null)
     try {
-      if (!token) throw new Error('Token inválido')
       const r = await fetch(`/api/chofer/${token}/entregas`, { cache: 'no-store' })
       const j = await r.json()
       if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`)
-      const rows = (j.entregas ?? []) as any[]
-      setItems(rows.map(e => ({
-        id: String(e.id),
-        orden: e.orden ?? null,
-        subcliente: e.subcliente ?? null,
-        direccion: e.direccion ?? null,
-        localidad: e.localidad ?? null,
-        provincia: e.provincia ?? null,
-        remito: e.remito ?? null,
-        estado_entrega: (e.estado_entrega ?? 'pendiente') as any,
-        observaciones: e.observaciones ?? null,
-        completado_at: e.completado_at ?? null,
-      })))
+      setItems(j.entregas ?? [])
     } catch (e: any) {
       setErr(String(e?.message || e))
     } finally {
@@ -55,7 +44,7 @@ export default function PortalChoferPage() {
     const r = await fetch(`/api/chofer/${token}/entregas/${id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ estado }), // El endpoint espera 'completado' | 'pendiente' | 'fallido'
+      body: JSON.stringify({ estado }),
     })
     const j = await r.json().catch(() => ({}))
     if (!r.ok || j?.error) {
@@ -76,7 +65,7 @@ export default function PortalChoferPage() {
     <div className="p-6 space-y-3">
       <h1 className="text-xl font-semibold">Entregas asignadas</h1>
       <ul className="space-y-2">
-        {items.map(e => (
+        {items.map((e: any) => (
           <li key={e.id} className="border rounded p-3">
             <div className="font-medium">{e.subcliente ?? '—'}</div>
             <div className="text-sm text-gray-600">{e.direccion ?? '—'}</div>
