@@ -17,9 +17,11 @@ type Entrega = {
 }
 
 export default function PortalChoferPage() {
-  const params = useParams()
-  const token = typeof params?.token === 'string' ? params.token : ''
-  const [items, setItems] = useState<Entrega[] | null>(null)
+  // ⚠️ useParams no tipado, y con fallback seguro
+  const params = useParams() as Record<string, string>
+  const token = params?.token ?? ''
+
+  const [items, setItems] = useState<Entrega[]>([])
   const [err, setErr] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
 
@@ -41,20 +43,26 @@ export default function PortalChoferPage() {
 
   const marcar = async (id: string, estado: 'completado' | 'pendiente' | 'fallido') => {
     setErr(null)
-    const r = await fetch(`/api/chofer/${token}/entregas/${id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ estado }),
-    })
-    const j = await r.json().catch(() => ({}))
-    if (!r.ok || j?.error) {
-      setErr(j?.error || `HTTP ${r.status}`)
-      return
+    try {
+      const r = await fetch(`/api/chofer/${token}/entregas/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ estado }),
+      })
+      const j = await r.json().catch(() => ({}))
+      if (!r.ok || j?.error) {
+        setErr(j?.error || `HTTP ${r.status}`)
+        return
+      }
+      load()
+    } catch (e: any) {
+      setErr(String(e?.message || e))
     }
-    load()
   }
 
-  useEffect(() => { load() }, [token])
+  useEffect(() => {
+    load()
+  }, [token])
 
   if (!token) return <div className="p-6 text-red-600">Token inválido</div>
   if (loading) return <div className="p-6">Cargando…</div>
@@ -65,7 +73,7 @@ export default function PortalChoferPage() {
     <div className="p-6 space-y-3">
       <h1 className="text-xl font-semibold">Entregas asignadas</h1>
       <ul className="space-y-2">
-        {items.map((e: any) => (
+        {items.map((e) => (
           <li key={e.id} className="border rounded p-3">
             <div className="font-medium">{e.subcliente ?? '—'}</div>
             <div className="text-sm text-gray-600">{e.direccion ?? '—'}</div>
@@ -74,9 +82,24 @@ export default function PortalChoferPage() {
               {e.completado_at ? ` · ${new Date(e.completado_at).toLocaleString()}` : ''}
             </div>
             <div className="flex gap-2 mt-2">
-              <button className="border rounded px-2 py-1" onClick={() => marcar(e.id, 'completado')}>Completado</button>
-              <button className="border rounded px-2 py-1" onClick={() => marcar(e.id, 'pendiente')}>Pendiente</button>
-              <button className="border rounded px-2 py-1" onClick={() => marcar(e.id, 'fallido')}>Fallido</button>
+              <button
+                className="border rounded px-2 py-1"
+                onClick={() => marcar(e.id, 'completado')}
+              >
+                Completado
+              </button>
+              <button
+                className="border rounded px-2 py-1"
+                onClick={() => marcar(e.id, 'pendiente')}
+              >
+                Pendiente
+              </button>
+              <button
+                className="border rounded px-2 py-1"
+                onClick={() => marcar(e.id, 'fallido')}
+              >
+                Fallido
+              </button>
             </div>
           </li>
         ))}
