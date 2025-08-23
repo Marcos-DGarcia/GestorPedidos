@@ -1,3 +1,4 @@
+// app/api/viajes/[id]/ensure-link/route.ts
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import crypto from 'crypto'
@@ -6,35 +7,55 @@ export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 export async function POST(
-  _req: NextRequest,
-   { params }: { params: Promise<{ id: string }> }
+  req: NextRequest,
+  { params }: { params: { id: string } }
 ) {
- const { id } = await params
-  const { searchParams } = new URL(_req.url)
-  const choferId = searchParams.get('choferId') || undefined
-  const viajeId = id
-  if (!viajeId) return NextResponse.json({ error: 'viajeId faltante' }, { status: 400 })
+  try {
+    const viajeId = String(params.id || '')
+    if (!viajeId) {
+      return NextResponse.json({ error: 'viajeId faltante' }, { status: 400 })
+    }
 
-  // ¿Ya hay link?
-  let query = supabaseAdmin.from('viajes_links').select('id, token, expires_at').eq('viaje_id', viajeId).limit(1)
-  if (choferId) query = query.eq('chofer_id', choferId)
+    // leer ?choferId=...
+    const { searchParams } = new URL(req.url)
+    const choferId = searchParams.get('choferId') || null
 
-  const { data: existing, error: exErr } = await query
-  if (exErr) return NextResponse.json({ error: exErr.message }, { status: 500 })
+    // ¿ya existe link? (si viene choferId, filtramos también por él)
+    let query = supabaseAdmin
+      .from('viajes_links')
+      .select('id, token')
+      .eq('viaje_id', viajeId)
+      .limit(1)
 
-  if (existing && existing.length) {
-    return NextResponse.json({ token: existing[0].token })
+    if (choferId) query = query.eq('chofer_id', choferId)
+
+    const { data: existing, error: exErr } = await query
+    if (exErr) return NextResponse.json({ error: exErr.message }, { status: 500 })
+
+    let finalToken: string
+    if (existing && existing.length > 0) {
+      finalToken = String(existing[0].token)
+    } else {
+      finalToken = crypto.randomBytes(24).toString('base64url')
+
+      // inserta sin expires_at (evitamos desfasajes de esquema)
+      const { error: insErr } = await supabaseAdmin
+        .from('viajes_links')
+        .insert({ viaje_id: viajeId, chofer_id: choferId, token: finalToken })
+
+      if (insErr) return NextResponse.json({ error: insErr.message }, { status: 500 })
+    }
+
+    // armar portalUrl
+    let base = process.env.NEXT_PUBLIC_BASE_URL || ''
+    if (!base) {
+      const vercel = process.env.VERCEL_URL // my-app.vercel.app
+      if (vercel) base = `https://${vercel}`
+    }
+    const portalUrl = base ? `${base}/chofer/${finalToken}` : null
+
+    return NextResponse.json({ ok: true, token: finalToken, portalUrl })
+  } catch (e: any) {
+    return NextResponse.json({ error: String(e?.message || e) }, { status: 500 })
   }
-
-  const token = crypto.randomBytes(24).toString('base64url')
-  const expiresAt = new Date(Date.now() + 1000 * 60 * 60 * 24 * 7).toISOString() // 7 días
-
-  const { data, error } = await supabaseAdmin
-    .from('viajes_links')
-    .insert({ viaje_id: viajeId, chofer_id: choferId ?? null, token, expires_at: expiresAt })
-    .select('token')
-    .single()
-
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-  return NextResponse.json({ token: data.token })
 }
