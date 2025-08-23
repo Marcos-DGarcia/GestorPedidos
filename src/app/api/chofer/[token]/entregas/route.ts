@@ -1,23 +1,41 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
-import { resolveLink, isExpired } from '../../_utils'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function GET(_req: NextRequest, context: any) {
+type Params = { params: { token: string } }
+
+// Helper: resuelve token -> viaje_id de forma directa y defensiva
+async function getLinkByToken(tokenRaw: string) {
+  const token = String(tokenRaw || '').trim()
+  if (!token) throw new Error('Token requerido')
+
+  const { data, error } = await supabaseAdmin
+    .from('viajes_links')
+    .select('id, token, viaje_id, chofer_id, expires_at')
+    .eq('token', token)
+    .maybeSingle()
+
+  if (error) throw new Error(error.message)
+  if (!data?.viaje_id) throw new Error('Link inválido')
+  return data
+}
+
+export async function GET(_req: NextRequest, { params }: Params) {
   try {
-    const token = String(context?.params?.token ?? '')
-    if (!token) {
-      return NextResponse.json({ error: 'Token requerido' }, { status: 400 })
+    // 1) Token -> link
+    const link = await getLinkByToken(params.token)
+
+    // 2) (Opcional) Expiración: solo si realmente usás expires_at
+    if (link.expires_at) {
+      const exp = new Date(link.expires_at).getTime()
+      if (Number.isFinite(exp) && Date.now() > exp) {
+        return NextResponse.json({ error: 'Link expirado' }, { status: 410 })
+      }
     }
 
-    // 1) Validar token -> viaje_id
-    const link = await resolveLink(token)
-    if (!link) return NextResponse.json({ error: 'Link inválido' }, { status: 404 })
-    if (isExpired(link.expires_at)) return NextResponse.json({ error: 'Link expirado' }, { status: 410 })
-
-    // 2) Traer viaje (nombres defensivos de columnas)
+    // 3) Viaje (sanity check)
     const { data: viaje, error: vErr } = await supabaseAdmin
       .from('viajes')
       .select('id, descripcion, fecha_programada, estado, solicitud_id')
@@ -27,7 +45,7 @@ export async function GET(_req: NextRequest, context: any) {
     if (vErr) return NextResponse.json({ error: vErr.message }, { status: 500 })
     if (!viaje) return NextResponse.json({ error: 'Viaje no encontrado' }, { status: 404 })
 
-    // 3) Resolver nombre de cliente (sin joins)
+    // 4) Cliente (sin joins)
     let clienteNombre: string | null = null
     if ((viaje as any).solicitud_id) {
       const { data: solicitud } = await supabaseAdmin
@@ -46,7 +64,7 @@ export async function GET(_req: NextRequest, context: any) {
       }
     }
 
-    // 4) Entregas del viaje — usar estado_entrega (no “estado”)
+    // 5) Entregas del viaje (usa exactamente los nombres que tenés)
     const { data: entregas, error: eErr } = await supabaseAdmin
       .from('viajes_entregas')
       .select(`
@@ -74,8 +92,13 @@ export async function GET(_req: NextRequest, context: any) {
 
     if (eErr) return NextResponse.json({ error: eErr.message }, { status: 500 })
 
+    // 6) Devolvé meta útil para validar rápido en prod
     return NextResponse.json({
       ok: true,
+      meta: {
+        link_viaje_id: link.viaje_id,
+        entregas_count: entregas?.length ?? 0,
+      },
       viaje: {
         id: viaje.id,
         descripcion: (viaje as any).descripcion ?? null,
@@ -86,6 +109,6 @@ export async function GET(_req: NextRequest, context: any) {
       entregas: entregas ?? [],
     })
   } catch (e: any) {
-    return NextResponse.json({ error: String(e?.message || e) }, { status: 500 })
+    return NextResponse.json({ error: String(e?.message || e) }, { status: 400 })
   }
 }
