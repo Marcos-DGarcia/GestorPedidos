@@ -1,4 +1,3 @@
-// app/api/operaciones/notify-chofer/route.ts
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import twilio from 'twilio'
@@ -7,7 +6,6 @@ import crypto from 'crypto'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-// ---------- helpers ----------
 const asStr = (v: unknown) => String(v ?? '')
 const toE164 = (tel: string) => {
   const t = tel.trim()
@@ -15,23 +13,9 @@ const toE164 = (tel: string) => {
   if (t.startsWith('+')) return t
   return `+${t.replace(/\D/g, '')}`
 }
-const requireEnv = (key: string) => {
-  const v = process.env[key]
-  if (!v) throw new Error(`Falta env ${key}`)
-  return v
-}
-
-// Twilio client
-const ACC_SID = requireEnv('TWILIO_ACCOUNT_SID')
-const AUTH_TOKEN = requireEnv('TWILIO_AUTH_TOKEN')
-const client = twilio(ACC_SID, AUTH_TOKEN)
-
-// arma base pública robusta
 function resolveBaseUrl(req: NextRequest) {
-  let base = process.env.NEXT_PUBLIC_BASE_URL
-  if (base) return base
+  if (process.env.NEXT_PUBLIC_BASE_URL) return process.env.NEXT_PUBLIC_BASE_URL
   if (process.env.VERCEL_URL) return `https://${process.env.VERCEL_URL}`
-  // último recurso: host del request
   const host = req.headers.get('host')
   const proto = req.headers.get('x-forwarded-proto') || 'https'
   return host ? `${proto}://${host}` : 'http://localhost:3000'
@@ -50,7 +34,6 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'viajeId y choferId son obligatorios' }, { status: 400 })
     }
 
-    // 1) Traer chofer
     const { data: chofer, error: chErr } = await supabaseAdmin
       .from('choferes')
       .select('telefono, nombre')
@@ -60,7 +43,6 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'No se encontró teléfono del chofer' }, { status: 404 })
     }
 
-    // 2) Asegurar token/link (sin llamar a otra ruta)
     const { data: existing } = await supabaseAdmin
       .from('viajes_links')
       .select('token')
@@ -79,7 +61,6 @@ export async function POST(req: NextRequest) {
     const baseUrl = resolveBaseUrl(req)
     const linkChofer = `${baseUrl}/chofer/${finalToken}`
 
-    // 3) Construir mensaje (si no viene manual)
     let mensaje = msgManual
     if (!mensaje) {
       const { data: entregas } = await supabaseAdmin
@@ -102,7 +83,6 @@ Ingresá para gestionar entregas:
 ${linkChofer}`
     }
 
-    // 4) Log preliminar
     const { data: prelim, error: insErr } = await supabaseAdmin
       .from('mensajes_chofer')
       .insert({
@@ -118,43 +98,43 @@ ${linkChofer}`
       .single()
     if (insErr) throw insErr
 
-    // 5) Twilio payload
-    const to = canal === 'whatsapp' ? `whatsapp:${toE164(chofer.telefono)}` : toE164(chofer.telefono)
-
-    const params: any = {
-      to,
-      body: mensaje,
+    const ACC_SID = process.env.TWILIO_ACCOUNT_SID
+    const AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN
+    if (!ACC_SID || !AUTH_TOKEN) {
+      return NextResponse.json({ error: 'Faltan credenciales de Twilio' }, { status: 500 })
     }
+    const client = twilio(ACC_SID, AUTH_TOKEN)
 
-    // status callback opcional solo si tenemos dominio público
+    const to = canal === 'whatsapp' ? `whatsapp:${toE164(chofer.telefono)}` : toE164(chofer.telefono)
+    const params: any = { to, body: mensaje }
+
     if (baseUrl && !baseUrl.includes('localhost')) {
       params.statusCallback = `${baseUrl}/api/webhooks/twilio-status`
     }
-
-    // media opcional
     if (archivo_url) params.mediaUrl = [archivo_url]
 
-    // preferí Messaging Service si existe, sino FROM por canal
     const MSG_SVC = process.env.TWILIO_MESSAGING_SERVICE_SID || ''
     if (MSG_SVC) {
       params.messagingServiceSid = MSG_SVC
     } else {
       if (canal === 'whatsapp') {
-        params.from = requireEnv('TWILIO_WHATSAPP_FROM') // ej 'whatsapp:+14155238886'
+        const FROM = process.env.TWILIO_WHATSAPP_FROM
+        if (!FROM) return NextResponse.json({ error: 'Falta TWILIO_WHATSAPP_FROM' }, { status: 500 })
+        params.from = FROM
       } else {
-        params.from = requireEnv('TWILIO_SMS_FROM')       // ej '+1XXXXXXXXXX'
+        const FROM = process.env.TWILIO_SMS_FROM
+        if (!FROM) return NextResponse.json({ error: 'Falta TWILIO_SMS_FROM' }, { status: 500 })
+        params.from = FROM
       }
     }
 
     const tw = await client.messages.create(params)
 
-    // 6) Actualizar log a 'enviado'
     await supabaseAdmin
       .from('mensajes_chofer')
       .update({ proveedor_msg_id: tw.sid, estado: 'enviado', updated_at: new Date().toISOString() })
       .eq('id', prelim.id)
 
-    // 7) Opcional: marcar viaje en_progreso
     await supabaseAdmin.from('viajes').update({ estado: 'en_progreso' }).eq('id', viajeId)
 
     return NextResponse.json({ ok: true, sid: tw.sid, link: linkChofer })

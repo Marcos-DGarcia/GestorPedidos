@@ -3,69 +3,43 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import twilio from 'twilio'
 
-export const runtime = 'nodejs'      // Twilio SDK requiere Node
+export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-// --- Helpers ---
-const requireEnv = (key: string) => {
-  const v = process.env[key]
-  if (!v || v.length === 0) throw new Error(`Falta env ${key}`)
-  return v
-}
+// Helpers
 const asStr = (v: unknown) => String(v ?? '')
 const toE164 = (tel: string) => {
-  const t = tel.trim()
+  const t = (tel || '').trim()
   if (!t) return ''
-  if (t.startsWith('+')) return t
-  return `+${t.replace(/\D/g, '')}`
+  return t.startsWith('+') ? t : `+${t.replace(/\D/g, '')}`
+}
+const resolveBaseUrl = (req: NextRequest) => {
+  if (process.env.NEXT_PUBLIC_BASE_URL) return process.env.NEXT_PUBLIC_BASE_URL
+  if (process.env.VERCEL_URL) return `https://${process.env.VERCEL_URL}`
+  const host = req.headers.get('host')
+  const proto = req.headers.get('x-forwarded-proto') || 'https'
+  return host ? `${proto}://${host}` : 'http://localhost:3000'
 }
 
-const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID || ''
-const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN || ''
-// Opcionales según tu setup
-const TWILIO_WHATSAPP_FROM = process.env.TWILIO_WHATSAPP_FROM || ''   // ej: 'whatsapp:+14155238886'
-const TWILIO_SMS_FROM = process.env.TWILIO_SMS_FROM || ''             // ej: '+1XXXXXXXXXX'
-const TWILIO_MESSAGING_SERVICE_SID = process.env.TWILIO_MESSAGING_SERVICE_SID || ''
-
-if (!TWILIO_ACCOUNT_SID || !TWILIO_AUTH_TOKEN) {
-  // Lanzamos al cargar el módulo para fallar rápido si faltan credenciales
-  throw new Error('Faltan TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN')
-}
-
-const twilioClient = twilio(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
-
-/**
- * POST /api/operaciones/despachar
- * Body:
- * {
- *   viajeId: string,                  // requerido
- *   canal?: 'whatsapp' | 'sms',       // default: 'whatsapp'
- *   mensaje?: string,                 // opcional (si no, se arma uno base)
- *   archivo_url?: string              // opcional (media)
- * }
- */
 export async function POST(req: NextRequest) {
   let parsedBody: any = null
 
   try {
+    // body
     parsedBody = await req.json().catch(() => ({}))
     const viajeId = asStr(parsedBody?.viajeId)
     const canal: 'whatsapp' | 'sms' = parsedBody?.canal === 'sms' ? 'sms' : 'whatsapp'
     const customMsg: string | undefined = parsedBody?.mensaje
     const mediaUrl: string | undefined = parsedBody?.archivo_url
+    if (!viajeId) return NextResponse.json({ error: 'viajeId requerido' }, { status: 400 })
 
-    if (!viajeId) {
-      return NextResponse.json({ error: 'viajeId requerido' }, { status: 400 })
-    }
-
-    // 1) Traer asignación → chofer
+    // chofer del viaje
     const { data: asign, error: asignErr } = await supabaseAdmin
       .from('vehiculos_asignados')
       .select('chofer_id')
       .eq('viaje_id', viajeId)
       .limit(1)
       .single()
-
     if (asignErr || !asign?.chofer_id) {
       return NextResponse.json({ error: 'No hay chofer asignado al viaje' }, { status: 404 })
     }
@@ -75,29 +49,23 @@ export async function POST(req: NextRequest) {
       .select('telefono, nombre')
       .eq('id', asign.chofer_id)
       .single()
-
     if (choferErr || !chofer?.telefono) {
       return NextResponse.json({ error: 'No se encontró teléfono del chofer' }, { status: 404 })
     }
 
-    // 2) Link del portal de chofer (si existe token)
+    // link del portal
     const { data: linkRow } = await supabaseAdmin
       .from('viajes_links')
       .select('token')
       .eq('viaje_id', viajeId)
       .maybeSingle()
-
-    let baseUrl = process.env.NEXT_PUBLIC_BASE_URL
-    if (!baseUrl) {
-      const vercelUrl = process.env.VERCEL_URL // p.ej. myapp.vercel.app
-      baseUrl = vercelUrl ? `https://${vercelUrl}` : 'http://localhost:3000'
-    }
+    const baseUrl = resolveBaseUrl(req)
     const portalUrl = linkRow?.token ? `${baseUrl}/chofer/${linkRow.token}` : baseUrl
 
-    // 3) Armado del mensaje
+    // mensaje
     const texto = customMsg || `Tenés un viaje asignado (ID: ${viajeId}). Link: ${portalUrl}`
 
-    // 4) Crear log preliminar en mensajes_chofer (estado 'pendiente')
+    // log preliminar
     const { data: prelim, error: insErr } = await supabaseAdmin
       .from('mensajes_chofer')
       .insert({
@@ -113,55 +81,54 @@ export async function POST(req: NextRequest) {
       .single()
     if (insErr) throw insErr
 
-    // 5) Enviar por Twilio
-    //   - Si usás Messaging Service, NO seteamos "from"
-    //   - Si no, usamos TWILIO_WHATSAPP_FROM o TWILIO_SMS_FROM según canal
-    const toE = toE164(asStr(chofer.telefono))
-    const to = canal === 'whatsapp' ? `whatsapp:${toE}` : toE
-
-    const params: any = {
-      to,
-      body: texto
+    // Twilio client (validaciones DENTRO del handler para no romper el build)
+    const ACC_SID = process.env.TWILIO_ACCOUNT_SID
+    const AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN
+    if (!ACC_SID || !AUTH_TOKEN) {
+      return NextResponse.json({ error: 'Faltan TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN' }, { status: 500 })
     }
+    const client = twilio(ACC_SID, AUTH_TOKEN)
 
-    // Callback de estado (opcional)
-    const publicBase = process.env.NEXT_PUBLIC_BASE_URL || ''
-    if (publicBase && !publicBase.includes('localhost')) {
-      params.statusCallback = `${publicBase}/api/webhooks/twilio-status`
+    // payload Twilio
+    const to = canal === 'whatsapp'
+      ? `whatsapp:${toE164(asStr(chofer.telefono))}`
+      : toE164(asStr(chofer.telefono))
+
+    const params: any = { to, body: texto }
+    if (baseUrl && !baseUrl.includes('localhost')) {
+      params.statusCallback = `${baseUrl}/api/webhooks/twilio-status`
     }
-
     if (mediaUrl) params.mediaUrl = [mediaUrl]
 
-    if (TWILIO_MESSAGING_SERVICE_SID) {
-      params.messagingServiceSid = TWILIO_MESSAGING_SERVICE_SID
+    const MSG_SVC = process.env.TWILIO_MESSAGING_SERVICE_SID || ''
+    if (MSG_SVC) {
+      params.messagingServiceSid = MSG_SVC
     } else {
       if (canal === 'whatsapp') {
-        requireEnv('TWILIO_WHATSAPP_FROM') // valida que exista
-        params.from = TWILIO_WHATSAPP_FROM
+        const FROM = process.env.TWILIO_WHATSAPP_FROM
+        if (!FROM) return NextResponse.json({ error: 'Falta TWILIO_WHATSAPP_FROM' }, { status: 500 })
+        params.from = FROM // ej: 'whatsapp:+14155238886' (sandbox) o tu WABA
       } else {
-        requireEnv('TWILIO_SMS_FROM')
-        params.from = TWILIO_SMS_FROM
+        const FROM = process.env.TWILIO_SMS_FROM
+        if (!FROM) return NextResponse.json({ error: 'Falta TWILIO_SMS_FROM' }, { status: 500 })
+        params.from = FROM // ej: '+1XXXXXXXXXX'
       }
     }
 
-    const result = await twilioClient.messages.create(params)
+    const tw = await client.messages.create(params)
 
-    // 6) Guardar SID y marcar 'enviado'
+    // actualizar log → enviado
     await supabaseAdmin
       .from('mensajes_chofer')
-      .update({
-        proveedor_msg_id: result.sid,
-        estado: 'enviado',
-        updated_at: new Date().toISOString()
-      })
+      .update({ proveedor_msg_id: tw.sid, estado: 'enviado', updated_at: new Date().toISOString() })
       .eq('id', prelim.id)
 
-    // 7) Avanzar estado del viaje a EN_PROGRESO
+    // avanzar estado del viaje
     await supabaseAdmin.from('viajes').update({ estado: 'en_progreso' }).eq('id', viajeId)
 
-    return NextResponse.json({ ok: true, sid: result.sid, portalUrl })
+    return NextResponse.json({ ok: true, sid: tw.sid, portalUrl })
   } catch (e: any) {
-    // Intentar dejar log de fallo SOLO si tenemos body parseado con viajeId
+    // log de fallo (si pudimos parsear body)
     try {
       if (parsedBody?.viajeId) {
         await supabaseAdmin
