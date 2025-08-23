@@ -1,11 +1,7 @@
-// src/app/chofer/[token]/page.tsx
 'use client'
 
 import { useEffect, useState } from 'react'
 import { useParams } from 'next/navigation'
-import ChoferClient from '@/components/ChoferClient'
-
-export const dynamic = 'force-dynamic'
 
 type Entrega = {
   id: string
@@ -15,70 +11,87 @@ type Entrega = {
   localidad: string | null
   provincia: string | null
   remito: string | null
-  estado: 'pendiente' | 'en_progreso' | 'entregado' | 'fallido'
+  estado_entrega: 'pendiente' | 'completado' | 'fallido'
   observaciones: string | null
   completado_at: string | null
-  entregado_at?: string | null
-  fallido_at?: string | null
-}
-
-const asStr = (v: unknown) => (v == null ? null : String(v))
-const asNum = (v: unknown) => {
-  if (v == null) return null
-  const n = Number(v)
-  return Number.isFinite(n) ? n : null
-}
-const asEstado = (v: unknown): Entrega['estado'] => {
-  const s = String(v ?? '').toLowerCase()
-  if (s === 'en_progreso') return 'en_progreso'
-  if (s === 'entregado') return 'entregado'
-  if (s === 'fallido' || s === 'no_entregado') return 'fallido'
-  return 'pendiente'
 }
 
 export default function PortalChoferPage() {
   const { token } = useParams<{ token: string }>()
-  const [entregas, setEntregas] = useState<Entrega[] | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const [items, setItems] = useState<Entrega[] | null>(null)
+  const [err, setErr] = useState<string | null>(null)
+  const [loading, setLoading] = useState(true)
 
-  useEffect(() => {
-    let cancelled = false
-    const run = async () => {
-      try {
-        if (!token) throw new Error('Token inválido')
-        const res = await fetch(`/api/chofer/${token}/entregas`, { cache: 'no-store' })
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        const json = await res.json()
-
-        // Normalización -> Entrega[]
-        const rows = (json?.entregas ?? []) as Array<Record<string, unknown>>
-        const safe: Entrega[] = rows.map((r) => ({
-          id: String(r.id ?? ''),
-          orden: asNum(r.orden),
-          subcliente: asStr(r.subcliente),
-          direccion: asStr(r.direccion),
-          localidad: asStr(r.localidad),
-          provincia: asStr(r.provincia),
-          remito: asStr(r.remito),
-          estado: asEstado((r as any).estado_entrega ?? (r as any).estado),
-          observaciones: asStr((r as any).observaciones ?? (r as any).obs),
-          completado_at: asStr((r as any).completado_at),
-          entregado_at: asStr((r as any).entregado_at),
-          fallido_at: asStr((r as any).fallido_at),
-        })).filter(e => e.id)
-
-        if (!cancelled) setEntregas(safe)
-      } catch (e: any) {
-        if (!cancelled) setError(String(e?.message || e))
-      }
+  const load = async () => {
+    setLoading(true)
+    setErr(null)
+    try {
+      if (!token) throw new Error('Token inválido')
+      const r = await fetch(`/api/chofer/${token}/entregas`, { cache: 'no-store' })
+      const j = await r.json()
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`)
+      const rows = (j.entregas ?? []) as any[]
+      setItems(rows.map(e => ({
+        id: String(e.id),
+        orden: e.orden ?? null,
+        subcliente: e.subcliente ?? null,
+        direccion: e.direccion ?? null,
+        localidad: e.localidad ?? null,
+        provincia: e.provincia ?? null,
+        remito: e.remito ?? null,
+        estado_entrega: (e.estado_entrega ?? 'pendiente') as any,
+        observaciones: e.observaciones ?? null,
+        completado_at: e.completado_at ?? null,
+      })))
+    } catch (e: any) {
+      setErr(String(e?.message || e))
+    } finally {
+      setLoading(false)
     }
-    run()
-    return () => { cancelled = true }
-  }, [token])
+  }
 
-  if (!token) return <div className="p-6 text-red-600">Token inválido.</div>
-  if (error)  return <div className="p-6 text-red-600">Error: {error}</div>
-  if (entregas === null) return <div className="p-6">Cargando…</div>
+  const marcar = async (id: string, estado: 'completado' | 'pendiente' | 'fallido') => {
+    setErr(null)
+    const r = await fetch(`/api/chofer/${token}/entregas/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ estado }), // El endpoint espera 'completado' | 'pendiente' | 'fallido'
+    })
+    const j = await r.json().catch(() => ({}))
+    if (!r.ok || j?.error) {
+      setErr(j?.error || `HTTP ${r.status}`)
+      return
+    }
+    load()
+  }
 
-  return <ChoferClient token={String(token)} initialEntregas={entregas} />
+  useEffect(() => { load() }, [token])
+
+  if (!token) return <div className="p-6 text-red-600">Token inválido</div>
+  if (loading) return <div className="p-6">Cargando…</div>
+  if (err) return <div className="p-6 text-red-600">Error: {err}</div>
+  if (!items?.length) return <div className="p-6">No hay entregas.</div>
+
+  return (
+    <div className="p-6 space-y-3">
+      <h1 className="text-xl font-semibold">Entregas asignadas</h1>
+      <ul className="space-y-2">
+        {items.map(e => (
+          <li key={e.id} className="border rounded p-3">
+            <div className="font-medium">{e.subcliente ?? '—'}</div>
+            <div className="text-sm text-gray-600">{e.direccion ?? '—'}</div>
+            <div className="text-sm mt-1">
+              Estado: <b>{e.estado_entrega}</b>
+              {e.completado_at ? ` · ${new Date(e.completado_at).toLocaleString()}` : ''}
+            </div>
+            <div className="flex gap-2 mt-2">
+              <button className="border rounded px-2 py-1" onClick={() => marcar(e.id, 'completado')}>Completado</button>
+              <button className="border rounded px-2 py-1" onClick={() => marcar(e.id, 'pendiente')}>Pendiente</button>
+              <button className="border rounded px-2 py-1" onClick={() => marcar(e.id, 'fallido')}>Fallido</button>
+            </div>
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
 }
