@@ -54,10 +54,11 @@ export async function PATCH(
       )
     }
 
-    // 3) Actualizar estado (columna correcta: `estado`) y timestamp
+    // 3) Actualizar (columna correcta: estado_entrega) y timestamp
     const patch: Record<string, any> = {
-      estado,
+      estado_entrega: estado,
       completado_at: estado === 'completado' ? new Date().toISOString() : null,
+      updated_at: new Date().toISOString(),
     }
 
     const { error: upErr } = await supabaseAdmin
@@ -65,25 +66,18 @@ export async function PATCH(
       .update(patch)
       .eq('id', cleanEntregaId)
       .eq('viaje_id', link.viaje_id) // defensa extra
-      .select('id')
-      .maybeSingle()
-
-    if (upErr) {
-      // Si acá tiraba el constraint, era por usar `estado_entrega` o un valor no permitido
-      return NextResponse.json({ ok: false, error: upErr.message }, { status: 400 })
-    }
+    if (upErr) return NextResponse.json({ ok: false, error: upErr.message }, { status: 400 })
 
     // 4) Si no quedan pendientes -> cerrar viaje
-    const { data: abierto, error: pendErr } = await supabaseAdmin
+    const { data: pendientes, error: pendErr } = await supabaseAdmin
       .from('viajes_entregas')
       .select('id')
       .eq('viaje_id', link.viaje_id)
-      .neq('estado', 'completado') // <— columna correcta
+      .neq('estado_entrega', 'completado') // <-- columna correcta
       .limit(1)
-
     if (pendErr) return NextResponse.json({ ok: false, error: pendErr.message }, { status: 500 })
 
-    if (!abierto || abierto.length === 0) {
+    if (!pendientes || pendientes.length === 0) {
       await supabaseAdmin.from('viajes').update({ estado: 'realizado' }).eq('id', link.viaje_id)
     }
 
