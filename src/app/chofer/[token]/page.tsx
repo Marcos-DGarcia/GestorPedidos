@@ -13,10 +13,10 @@ type Entrega = {
   localidad: string | null
   provincia: string | null
   remito: string | null
-  estado: Estado                 // <- columna correcta en DB
+  estado: Estado                 // ← usamos estado en el front
   observaciones: string | null
   completado_at: string | null
-  _saving?: boolean              // <- UI flag local
+  _saving?: boolean              // flag UI
 }
 
 export default function PortalChoferPage() {
@@ -40,16 +40,17 @@ export default function PortalChoferPage() {
       const r = await fetch(`/api/chofer/${token}/entregas`, { cache: 'no-store' })
       const j = await r.json()
       if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`)
-      // Aseguramos que llegue como `estado`
+
+      // BACKEND devuelve estado_entrega → lo normalizamos a estado
       const rows: Entrega[] = (j.entregas ?? []).map((e: any) => ({
-        id: e.id,
+        id: String(e.id),
         orden: e.orden ?? null,
         subcliente: e.subcliente ?? null,
         direccion: e.direccion ?? null,
         localidad: e.localidad ?? null,
         provincia: e.provincia ?? null,
         remito: e.remito ?? null,
-        estado_entregas: e.estado as Estado,          // <- normalizado
+        estado: (e.estado_entrega ?? 'pendiente') as Estado, // ← clave
         observaciones: e.observaciones ?? null,
         completado_at: e.completado_at ?? null,
       }))
@@ -63,16 +64,21 @@ export default function PortalChoferPage() {
 
   const marcar = async (id: string, estado: Estado) => {
     setErr(null)
-    // Optimistic UI: marcar saving y estado temporal
+
+    // Optimistic UI
     setItems(prev =>
-      prev.map(e => (e.id === id ? { ...e, _saving: true, estado, completado_at: estado === 'completado' ? new Date().toISOString() : null } : e))
+      prev.map(e =>
+        e.id === id
+          ? { ...e, _saving: true, estado, completado_at: estado === 'completado' ? new Date().toISOString() : null }
+          : e
+      )
     )
 
     try {
       const r = await fetch(`/api/chofer/${token}/entregas/${id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ estado }),   // <- valores: 'pendiente' | 'completado' | 'fallido'
+        body: JSON.stringify({ estado }), // ← el API traduce a estado_entrega
       })
       const j = await r.json().catch(() => ({}))
       if (!r.ok || j?.error) {
@@ -81,7 +87,7 @@ export default function PortalChoferPage() {
         setErr(j?.error || `HTTP ${r.status}`)
         return
       }
-      // Refrescar desde servidor para quedar consistentes
+      // Refrescar desde servidor
       await load()
     } catch (e: any) {
       setItems(prev => prev.map(ent => (ent.id === id ? { ...ent, _saving: false } : ent)))
