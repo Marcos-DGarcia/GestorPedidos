@@ -119,9 +119,10 @@ export async function POST(req: NextRequest, context: any) {
     }
 
     // 7) URL pública
-    let base = process.env.NEXT_PUBLIC_BASE_URL || ''
-    if (!base && process.env.VERCEL_URL) base = `https://${process.env.VERCEL_URL}`
-    const portalUrl = base ? `${base}/chofer/${finalToken}` : null
+    let base = process.env.NEXT_PUBLIC_BASE_URL || 'https://gestor-pedidos-xi.vercel.app'
+    base = base.replace(/\/+$/, '') // limpiar posibles barras finales
+    const portalUrl = `${base}/chofer/${finalToken}`
+
 
     return NextResponse.json({
       ok: true,

@@ -37,9 +37,26 @@ export async function POST(req: NextRequest, context: any) {
       if (insErr) return NextResponse.json({ error: insErr.message }, { status: 500 })
     }
 
-    let base = process.env.NEXT_PUBLIC_BASE_URL || ''
-    if (!base && process.env.VERCEL_URL) base = `https://${process.env.VERCEL_URL}`
-    const portalUrl = base ? `${base}/chofer/${finalToken}` : null
+    // helper opcional (puede ir al top del archivo)
+    const getPublicBaseUrl = () => {
+      // en dev permitimos localhost para probar
+      const raw =
+        process.env.NEXT_PUBLIC_BASE_URL ||
+        (process.env.NODE_ENV === 'development' ? 'http://localhost:3000' : '');
+      return raw ? raw.replace(/\/+$/, '') : '';
+    };
+
+    // ...dentro del handler:
+    const base = getPublicBaseUrl();
+    if (!base) {
+      // no generes un link si no hay dominio público configurado
+      return NextResponse.json(
+        { error: 'Falta configurar NEXT_PUBLIC_BASE_URL (dominio público)' },
+        { status: 500 }
+      );
+    }
+    const portalUrl = `${base}/chofer/${finalToken}`;
+
 
     return NextResponse.json({ ok: true, token: finalToken, portalUrl })
   } catch (e: any) {
