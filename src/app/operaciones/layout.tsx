@@ -13,6 +13,7 @@ const navItems = [
   { label: 'Clientes',      href: '/operaciones/clientes' },
   { label: 'Planificacion', href: '/operaciones/planificacion' },
   { label: 'Mantenimiento', href: '/operaciones/mantenimientos' },
+  { label: 'Pendientes', href: '/operaciones/pendientes' },
 ]
 
 // Alto del header fijo
