@@ -4,9 +4,17 @@ import { supabaseAdmin } from '@/lib/supabaseAdmin'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function PATCH(req: Request, context: { params?: Record<string, string> }) {
-  const token = context?.params?.token?.trim() || ''
-  const entregaId = context?.params?.entregaId || ''
+type AnyParams = Record<string, unknown>
+const getParam = (params: AnyParams | undefined, key: string): string => {
+  const v = params?.[key]
+  if (Array.isArray(v)) return String(v[0] ?? '').trim()
+  if (typeof v === 'string') return v.trim()
+  return v != null ? String(v).trim() : ''
+}
+
+export async function PATCH(req: Request, context: { params?: AnyParams }) {
+  const token = getParam(context?.params, 'token')
+  const entregaId = getParam(context?.params, 'entregaId')
 
   if (!token || !entregaId) {
     return NextResponse.json({ error: 'parámetros inválidos' }, { status: 400 })
@@ -15,29 +23,24 @@ export async function PATCH(req: Request, context: { params?: Record<string, str
   const body = await req.json().catch(() => ({} as any))
   const estado: 'completado' | 'pendiente' | 'fallido' | undefined = body?.estado
 
-  // Buscar viaje del token
   const { data: link, error: linkErr } = await supabaseAdmin
     .from('viajes_links')
     .select('viaje_id')
     .eq('token', token)
     .maybeSingle()
-
   if (linkErr) return NextResponse.json({ error: linkErr.message }, { status: 500 })
   if (!link?.viaje_id) return NextResponse.json({ error: 'Link inválido' }, { status: 404 })
 
-  // Verificar que la entrega pertenece al viaje
   const { data: entrega, error: entErr } = await supabaseAdmin
     .from('viajes_entregas')
     .select('id, viaje_id')
     .eq('id', entregaId)
     .maybeSingle()
-
   if (entErr) return NextResponse.json({ error: entErr.message }, { status: 500 })
   if (!entrega || entrega.viaje_id !== link.viaje_id) {
     return NextResponse.json({ error: 'entrega no pertenece al viaje del token' }, { status: 403 })
   }
 
-  // Actualizar estado
   const patch: Record<string, any> = {}
   if (estado === 'completado') {
     patch.estado_entrega = 'completado'
@@ -55,18 +58,15 @@ export async function PATCH(req: Request, context: { params?: Record<string, str
       .from('viajes_entregas')
       .update(patch)
       .eq('id', entregaId)
-
     if (upErr) return NextResponse.json({ error: upErr.message }, { status: 500 })
   }
 
-  // Cerrar viaje si todas están completas
   const { data: pendientes, error: pendErr } = await supabaseAdmin
     .from('viajes_entregas')
     .select('id')
     .eq('viaje_id', link.viaje_id)
     .neq('estado_entrega', 'completado')
     .limit(1)
-
   if (pendErr) return NextResponse.json({ error: pendErr.message }, { status: 500 })
 
   if (!pendientes || pendientes.length === 0) {

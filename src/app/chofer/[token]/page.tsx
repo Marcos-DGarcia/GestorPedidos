@@ -17,13 +17,12 @@ type Entrega = {
 }
 
 export default function PortalChoferPage() {
-  // ✅ useParams devuelve Record<string,string|string[]>
   const params = useParams()
   const token =
     typeof params?.token === 'string'
       ? params.token.trim()
       : Array.isArray(params?.token)
-      ? params.token[0].trim()
+      ? String(params.token[0] ?? '').trim()
       : ''
 
   const [items, setItems] = useState<Entrega[]>([])
@@ -65,9 +64,7 @@ export default function PortalChoferPage() {
     }
   }
 
-  useEffect(() => {
-    load()
-  }, [token])
+  useEffect(() => { load() }, [token])
 
   if (!token) return <div className="p-6 text-red-600">Token inválido</div>
   if (loading) return <div className="p-6">Cargando…</div>
@@ -87,15 +84,9 @@ export default function PortalChoferPage() {
               {e.completado_at ? ` · ${new Date(e.completado_at).toLocaleString()}` : ''}
             </div>
             <div className="flex gap-2 mt-2">
-              <button className="border rounded px-2 py-1" onClick={() => marcar(e.id, 'completado')}>
-                Completado
-              </button>
-              <button className="border rounded px-2 py-1" onClick={() => marcar(e.id, 'pendiente')}>
-                Pendiente
-              </button>
-              <button className="border rounded px-2 py-1" onClick={() => marcar(e.id, 'fallido')}>
-                Fallido
-              </button>
+              <button className="border rounded px-2 py-1" onClick={() => marcar(e.id, 'completado')}>Completado</button>
+              <button className="border rounded px-2 py-1" onClick={() => marcar(e.id, 'pendiente')}>Pendiente</button>
+              <button className="border rounded px-2 py-1" onClick={() => marcar(e.id, 'fallido')}>Fallido</button>
             </div>
           </li>
         ))}
