@@ -20,9 +20,9 @@ export async function PATCH(
     }
 
     const body = await req.json().catch(() => ({} as any))
-    const estado = String(body?.estado ?? '').trim() as 'pendiente' | 'completado' | 'fallido'
+    const estado = String(body?.estado ?? '').trim() as 'pendiente' | 'entregado' | 'fallido'
 
-    const PERMITIDOS = new Set(['pendiente', 'completado', 'fallido'])
+    const PERMITIDOS = new Set(['pendiente', 'entregado', 'fallido'])
     if (!PERMITIDOS.has(estado)) {
       return NextResponse.json({ ok: false, error: 'Estado inválido' }, { status: 400 })
     }
@@ -57,7 +57,7 @@ export async function PATCH(
     // 3) Actualizar (columna correcta: estado_entrega) y timestamp
     const patch: Record<string, any> = {
       estado_entrega: estado,
-      completado_at: estado === 'completado' ? new Date().toISOString() : null,
+      entregado_at: estado === 'entregado' ? new Date().toISOString() : null,
       updated_at: new Date().toISOString(),
     }
 
@@ -73,7 +73,7 @@ export async function PATCH(
       .from('viajes_entregas')
       .select('id')
       .eq('viaje_id', link.viaje_id)
-      .neq('estado_entrega', 'completado') // <-- columna correcta
+      .neq('estado_entrega', 'entregado') // <-- columna correcta
       .limit(1)
     if (pendErr) return NextResponse.json({ ok: false, error: pendErr.message }, { status: 500 })
 
