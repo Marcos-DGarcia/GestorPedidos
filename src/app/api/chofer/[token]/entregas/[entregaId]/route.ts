@@ -5,7 +5,10 @@ import { supabaseAdmin } from '@/lib/supabaseAdmin'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-// Next 15: params es Promise -> await
+// ---- Tipos locales para evitar casts inline problemáticos
+type EstadoUI = 'pendiente' | 'entregado' | 'fallido' | 'completado'
+type EstadoDB = 'pendiente' | 'entregado' | 'fallido' | 'completado'
+
 export async function PATCH(
   req: Request,
   { params }: { params: Promise<{ token: string; entregaId: string }> }
@@ -20,12 +23,28 @@ export async function PATCH(
     }
 
     const body = await req.json().catch(() => ({} as any))
-    const estado = String(body?.estado ?? '').trim() as 'pendiente' | 'entregado' | 'fallido'
 
-    const PERMITIDOS = new Set(['pendiente', 'entregado', 'fallido'])
-    if (!PERMITIDOS.has(estado)) {
+    const estadoIn = String(body?.estado ?? '')
+      .trim()
+      .toLowerCase() as EstadoUI
+
+    const PERMITIDOS: ReadonlySet<EstadoUI> = new Set([
+      'pendiente',
+      'entregado',
+      'fallido',
+      'completado',
+    ])
+    if (!PERMITIDOS.has(estadoIn)) {
       return NextResponse.json({ ok: false, error: 'Estado inválido' }, { status: 400 })
     }
+
+    // Mapear UI -> DB (si tu CHECK aún usa 'entregado' para "completado")
+    const estadoDB: EstadoDB = (estadoIn === 'completado' ? 'entregado' : estadoIn) as EstadoDB
+
+    const isTerminado =
+      estadoDB === 'entregado' ||
+      estadoDB === 'completado' ||
+      estadoDB === 'fallido'
 
     // 1) Resolver viaje por token
     const { data: link, error: linkErr } = await supabaseAdmin
@@ -39,7 +58,7 @@ export async function PATCH(
       return NextResponse.json({ ok: false, error: 'Link inválido' }, { status: 404 })
     }
 
-    // 2) Verificar que la entrega pertenezca al viaje del token
+    // 2) Verificar pertenencia
     const { data: entrega, error: entErr } = await supabaseAdmin
       .from('viajes_entregas')
       .select('id, viaje_id')
@@ -54,10 +73,11 @@ export async function PATCH(
       )
     }
 
-    // 3) Actualizar (columna correcta: estado_entrega) y timestamp
+    // 3) Actualizar estado + timestamps
     const patch: Record<string, any> = {
-      estado_entrega: estado,
-      entregado_at: estado === 'entregado' ? new Date().toISOString() : null,
+      estado_entrega: estadoDB,
+      // Seteamos completado_at para entregado/completado/fallido
+      completado_at: isTerminado ? new Date().toISOString() : null,
       updated_at: new Date().toISOString(),
     }
 
@@ -65,15 +85,15 @@ export async function PATCH(
       .from('viajes_entregas')
       .update(patch)
       .eq('id', cleanEntregaId)
-      .eq('viaje_id', link.viaje_id) // defensa extra
+      .eq('viaje_id', link.viaje_id)
     if (upErr) return NextResponse.json({ ok: false, error: upErr.message }, { status: 400 })
 
-    // 4) Si no quedan pendientes -> cerrar viaje
+    // 4) Cerrar viaje si NO quedan pendientes (fallidos cuentan como terminados)
     const { data: pendientes, error: pendErr } = await supabaseAdmin
       .from('viajes_entregas')
       .select('id')
       .eq('viaje_id', link.viaje_id)
-      .neq('estado_entrega', 'entregado') // <-- columna correcta
+      .eq('estado_entrega', 'pendiente')
       .limit(1)
     if (pendErr) return NextResponse.json({ ok: false, error: pendErr.message }, { status: 500 })
 
