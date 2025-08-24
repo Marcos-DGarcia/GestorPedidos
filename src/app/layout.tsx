@@ -1,5 +1,6 @@
 // app/(dashboard)/layout.tsx
 import type { ReactNode } from 'react'
+import "./globals.css"
 import ResponsiveShell from '@/components/ResponsiveShell'
 
 export default function DashboardLayout({ children }: { children: ReactNode }) {

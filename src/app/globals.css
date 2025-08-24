@@ -120,3 +120,5 @@
     @apply bg-background text-foreground;
   }
 }
+/* opcional: tweaks mínimos para que se vea prolijo */
+html, body { height: 100%; }
