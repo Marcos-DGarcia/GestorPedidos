@@ -12,25 +12,18 @@ type Props = {
 export default function ResponsiveShell({ sidebar, topbarTitle = 'Panel', children }: Props) {
   const [open, setOpen] = useState(false)
 
-  // Abrir por defecto en desktop, cerrar en mobile
+  // Bloquea el scroll SOLO en cliente y SOLO en mobile cuando está abierto
   useEffect(() => {
-    const mq = window.matchMedia('(min-width: 768px)')
-    setOpen(mq.matches)
-    const onChange = () => setOpen(mq.matches)
-    mq.addEventListener?.('change', onChange)
-    return () => mq.removeEventListener?.('change', onChange)
-  }, [])
-
-  // Bloquear scroll en mobile cuando está abierto
-  useEffect(() => {
-    const was = document.body.style.overflow
-    if (open && window.innerWidth < 768) document.body.style.overflow = 'hidden'
-    else document.body.style.overflow = was || ''
-    return () => { document.body.style.overflow = was || '' }
+    if (typeof document === 'undefined') return
+    const prev = document.body.style.overflow
+    const isMobile = typeof window !== 'undefined' ? window.innerWidth < 768 : false
+    if (open && isMobile) document.body.style.overflow = 'hidden'
+    return () => { document.body.style.overflow = prev }
   }, [open])
 
-  // ESC para cerrar
+  // Cerrar con ESC (solo cliente)
   useEffect(() => {
+    if (typeof window === 'undefined') return
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -45,7 +38,6 @@ export default function ResponsiveShell({ sidebar, topbarTitle = 'Panel', childr
           aria-label={open ? 'Cerrar menú' : 'Abrir menú'}
           className="p-2 rounded-md border md:hidden"
         >
-          {/* Ícono hamburguesa simple */}
           <div className="space-y-1">
             <span className="block h-0.5 w-5 bg-gray-800" />
             <span className="block h-0.5 w-5 bg-gray-800" />
@@ -75,9 +67,8 @@ export default function ResponsiveShell({ sidebar, topbarTitle = 'Panel', childr
             'md:static md:translate-x-0 md:shadow-none'
           ].join(' ')}
           role="navigation"
-          aria-hidden={!open && window.innerWidth < 768}
         >
-          <div className="h-12 md:hidden" /> {/* Spacer bajo topbar en mobile */}
+          <div className="h-12 md:hidden" />
           <div className="p-3">
             {sidebar ?? (
               <nav className="space-y-1 text-sm">
@@ -91,7 +82,7 @@ export default function ResponsiveShell({ sidebar, topbarTitle = 'Panel', childr
         </aside>
 
         {/* Main */}
-        <main className="md:ml-72 p-4">
+        <main className="p-4 md:ml-72">
           {children}
         </main>
       </div>
