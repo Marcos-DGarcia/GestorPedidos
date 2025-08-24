@@ -1,20 +1,16 @@
+// src/app/api/chofer/[token]/entregas/[entregaId]/route.ts
 import { NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-type AnyParams = Record<string, unknown>
-const getParam = (params: AnyParams | undefined, key: string): string => {
-  const v = params?.[key]
-  if (Array.isArray(v)) return String(v[0] ?? '').trim()
-  if (typeof v === 'string') return v.trim()
-  return v != null ? String(v).trim() : ''
-}
-
-export async function PATCH(req: Request, context: { params?: AnyParams }) {
-  const token = getParam(context?.params, 'token')
-  const entregaId = getParam(context?.params, 'entregaId')
+export async function PATCH(
+  req: Request,
+  { params }: { params: { token: string; entregaId: string } }
+) {
+  const token = (params.token ?? '').trim()
+  const entregaId = (params.entregaId ?? '').trim()
 
   if (!token || !entregaId) {
     return NextResponse.json({ error: 'parámetros inválidos' }, { status: 400 })
@@ -23,6 +19,7 @@ export async function PATCH(req: Request, context: { params?: AnyParams }) {
   const body = await req.json().catch(() => ({} as any))
   const estado: 'completado' | 'pendiente' | 'fallido' | undefined = body?.estado
 
+  // 1) token -> viaje
   const { data: link, error: linkErr } = await supabaseAdmin
     .from('viajes_links')
     .select('viaje_id')
@@ -31,6 +28,7 @@ export async function PATCH(req: Request, context: { params?: AnyParams }) {
   if (linkErr) return NextResponse.json({ error: linkErr.message }, { status: 500 })
   if (!link?.viaje_id) return NextResponse.json({ error: 'Link inválido' }, { status: 404 })
 
+  // 2) Validar entrega pertenece al viaje
   const { data: entrega, error: entErr } = await supabaseAdmin
     .from('viajes_entregas')
     .select('id, viaje_id')
@@ -41,6 +39,7 @@ export async function PATCH(req: Request, context: { params?: AnyParams }) {
     return NextResponse.json({ error: 'entrega no pertenece al viaje del token' }, { status: 403 })
   }
 
+  // 3) Patch estado
   const patch: Record<string, any> = {}
   if (estado === 'completado') {
     patch.estado_entrega = 'completado'
@@ -53,7 +52,7 @@ export async function PATCH(req: Request, context: { params?: AnyParams }) {
     patch.completado_at = null
   }
 
-  if (Object.keys(patch).length) {
+  if (Object.keys(patch).length > 0) {
     const { error: upErr } = await supabaseAdmin
       .from('viajes_entregas')
       .update(patch)
@@ -61,6 +60,7 @@ export async function PATCH(req: Request, context: { params?: AnyParams }) {
     if (upErr) return NextResponse.json({ error: upErr.message }, { status: 500 })
   }
 
+  // 4) Autocierre si no quedan pendientes
   const { data: pendientes, error: pendErr } = await supabaseAdmin
     .from('viajes_entregas')
     .select('id')
