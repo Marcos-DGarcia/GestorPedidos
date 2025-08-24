@@ -17,9 +17,14 @@ type Entrega = {
 }
 
 export default function PortalChoferPage() {
-  // ⚠️ useParams no tipado, y con fallback seguro
-  const params = useParams() as Record<string, string>
-  const token = params?.token ?? ''
+  // ✅ useParams devuelve Record<string,string|string[]>
+  const params = useParams()
+  const token =
+    typeof params?.token === 'string'
+      ? params.token.trim()
+      : Array.isArray(params?.token)
+      ? params.token[0].trim()
+      : ''
 
   const [items, setItems] = useState<Entrega[]>([])
   const [err, setErr] = useState<string | null>(null)
@@ -82,22 +87,13 @@ export default function PortalChoferPage() {
               {e.completado_at ? ` · ${new Date(e.completado_at).toLocaleString()}` : ''}
             </div>
             <div className="flex gap-2 mt-2">
-              <button
-                className="border rounded px-2 py-1"
-                onClick={() => marcar(e.id, 'completado')}
-              >
+              <button className="border rounded px-2 py-1" onClick={() => marcar(e.id, 'completado')}>
                 Completado
               </button>
-              <button
-                className="border rounded px-2 py-1"
-                onClick={() => marcar(e.id, 'pendiente')}
-              >
+              <button className="border rounded px-2 py-1" onClick={() => marcar(e.id, 'pendiente')}>
                 Pendiente
               </button>
-              <button
-                className="border rounded px-2 py-1"
-                onClick={() => marcar(e.id, 'fallido')}
-              >
+              <button className="border rounded px-2 py-1" onClick={() => marcar(e.id, 'fallido')}>
                 Fallido
               </button>
             </div>

@@ -4,12 +4,9 @@ import { supabaseAdmin } from '@/lib/supabaseAdmin'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-// ✅ Usamos destructuring directo de params, compatible con Vercel
-export async function GET(
-  _req: Request,
-  { params }: { params: { token: string } }
-) {
-  const token = params?.token?.trim() || ''
+// ✅ Funciona en local y en producción (Vercel)
+export async function GET(req: Request, context: any) {
+  const token = String(context?.params?.token ?? '').trim()
   if (!token) {
     return NextResponse.json({ error: 'token requerido' }, { status: 400 })
   }
@@ -44,7 +41,10 @@ export async function GET(
   // 3) Respuesta final
   return NextResponse.json({
     ok: true,
-    meta: { link_viaje_id: link.viaje_id, entregas_count: entregas?.length ?? 0 },
+    meta: {
+      link_viaje_id: link.viaje_id,
+      entregas_count: entregas?.length ?? 0,
+    },
     entregas: entregas ?? [],
   })
 }
