@@ -49,7 +49,7 @@ export default function PortalChoferPage() {
         localidad: e.localidad ?? null,
         provincia: e.provincia ?? null,
         remito: e.remito ?? null,
-        estado: e.estado as Estado,          // <- normalizado
+        estado_entregas: e.estado as Estado,          // <- normalizado
         observaciones: e.observaciones ?? null,
         completado_at: e.completado_at ?? null,
       }))
