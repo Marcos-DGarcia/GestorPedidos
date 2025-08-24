@@ -50,7 +50,7 @@ export default function PortalChoferPage() {
         localidad: e.localidad ?? null,
         provincia: e.provincia ?? null,
         remito: e.remito ?? null,
-        estado: (e.estado_entrega ?? 'pendiente') as Estado, // ← clave
+        estado_entrega: (e.estado_entrega ?? 'pendiente') as Estado, // ← clave
         observaciones: e.observaciones ?? null,
         completado_at: e.completado_at ?? null,
       }))
