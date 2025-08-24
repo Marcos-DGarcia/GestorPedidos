@@ -176,10 +176,10 @@ export default function AsignarViaje() {
     try {
       const { data: todas } = await supabase
         .from('viajes_entregas')
-        .select('id, estado_entrega')
+        .select('id, estado')
         .eq('viaje_id', viajeId)
       const total = todas?.length ?? 0
-      const done = (todas ?? []).filter(r => r.estado_entrega === 'entregado').length
+      const done = (todas ?? []).filter(r => r.estado === 'completado').length
       setEntregasTotal(total)
       setEntregasDone(done)
     } catch (e) {
@@ -300,7 +300,7 @@ export default function AsignarViaje() {
       }))
       setAsignaciones(asign)
 
-      setMensaje(nextEstado === 'asignado' ? 'Asignación completada.' : 'Reserva registrada.')
+      setMensaje(nextEstado === 'asignado' ? 'Asignación completada.' : 'Reserva registrado.')
     }
   }
 
@@ -310,9 +310,9 @@ export default function AsignarViaje() {
     return asignaciones.some((a) => !!a.chofer_id && !!a.vehiculo_id)
   }, [asignaciones])
 
+  // ====== DESPACHAR (llamada a la API actualizada) ======
   const despachar = async (canal: 'whatsapp' | 'sms' = 'whatsapp') => {
     try {
-      // Solo despachar si está asignado (vehículo + chofer)
       if ((viaje?.estado ?? '') !== 'asignado' && !listoParaDespachar) {
         setDespachoMsg('Para despachar, el viaje debe estar ASIGNADO (vehículo y chofer).')
         return
@@ -321,27 +321,24 @@ export default function AsignarViaje() {
       setEnviando(true)
       setDespachoMsg(null)
 
-      // Llamada a tu API
       const res = await fetch('/api/operaciones/despachar', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ viajeId, canal }),
       })
-      const json = await res.json()
-      if (!res.ok) throw new Error(json?.error || 'No se pudo despachar el viaje')
 
-      // Si todo ok, avanzamos estado a en_progreso
-      const { error: upErr } = await supabase
-        .from('viajes')
-        .update({ estado: 'en_progreso' })
-        .eq('id', viajeId)
-
-      if (upErr) {
-        setDespachoMsg('Enviado al chofer, pero no se pudo actualizar el estado.')
-      } else {
-        setDespachoMsg('¡Despachado correctamente!')
-        setViaje((v) => (v ? { ...v, estado: 'en_progreso' } : v))
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok || !json?.ok) {
+        throw new Error(json?.error || `HTTP ${res.status}`)
       }
+
+      // Si la API devolvió portalUrl, la guardamos para abrir rápido
+      if (typeof json.portalUrl === 'string') setPortalUrl(json.portalUrl)
+
+      // El route ya pone el viaje en 'en_progreso'; igual actualizamos localmente
+      setViaje((v) => (v ? { ...v, estado: 'en_progreso' } : v))
+      setDespachoMsg('¡Despachado correctamente!')
+
     } catch (e: any) {
       setDespachoMsg(`Error al despachar: ${e.message}`)
     } finally {

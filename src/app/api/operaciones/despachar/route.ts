@@ -2,71 +2,83 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import twilio from 'twilio'
+import crypto from 'crypto'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 // Helpers
-const asStr = (v: unknown) => String(v ?? '')
-const toE164 = (tel: string) => {
-  const t = (tel || '').trim()
-  if (!t) return ''
-  return t.startsWith('+') ? t : `+${t.replace(/\D/g, '')}`
-}
-const resolveBaseUrl = (req: NextRequest) => {
-  if (process.env.NEXT_PUBLIC_BASE_URL) return process.env.NEXT_PUBLIC_BASE_URL
-  if (process.env.VERCEL_URL) return `https://${process.env.VERCEL_URL}`
-  const host = req.headers.get('host')
-  const proto = req.headers.get('x-forwarded-proto') || 'https'
-  return host ? `${proto}://${host}` : 'http://localhost:3000'
-}
+const asStr = (v: unknown) => String(v ?? '').trim()
+const isE164 = (s: string) => /^\+?[1-9]\d{6,14}$/.test(s)
 
 export async function POST(req: NextRequest) {
   let parsedBody: any = null
 
   try {
-    // body
+    // 0) Body
     parsedBody = await req.json().catch(() => ({}))
     const viajeId = asStr(parsedBody?.viajeId)
     const canal: 'whatsapp' | 'sms' = parsedBody?.canal === 'sms' ? 'sms' : 'whatsapp'
     const customMsg: string | undefined = parsedBody?.mensaje
     const mediaUrl: string | undefined = parsedBody?.archivo_url
-    if (!viajeId) return NextResponse.json({ error: 'viajeId requerido' }, { status: 400 })
+    const dryRun: boolean = !!parsedBody?.dryRun
 
-    // chofer del viaje
+    if (!viajeId) {
+      return NextResponse.json({ ok: false, error: 'viajeId requerido' }, { status: 400 })
+    }
+
+    // 1) Base pública fija
+    const base = asStr(process.env.NEXT_PUBLIC_BASE_URL)
+    if (!base) {
+      return NextResponse.json({ ok: false, error: 'NEXT_PUBLIC_BASE_URL no configurado' }, { status: 500 })
+    }
+
+    // 2) Chofer asignado al viaje
     const { data: asign, error: asignErr } = await supabaseAdmin
       .from('vehiculos_asignados')
       .select('chofer_id')
       .eq('viaje_id', viajeId)
-      .limit(1)
-      .single()
-    if (asignErr || !asign?.chofer_id) {
-      return NextResponse.json({ error: 'No hay chofer asignado al viaje' }, { status: 404 })
-    }
+      .maybeSingle()
+
+    if (asignErr) return NextResponse.json({ ok: false, error: `DB vehiculos_asignados: ${asignErr.message}` }, { status: 500 })
+    if (!asign?.chofer_id) return NextResponse.json({ ok: false, error: 'No hay chofer asignado al viaje' }, { status: 404 })
 
     const { data: chofer, error: choferErr } = await supabaseAdmin
       .from('choferes')
       .select('telefono, nombre')
       .eq('id', asign.chofer_id)
-      .single()
-    if (choferErr || !chofer?.telefono) {
-      return NextResponse.json({ error: 'No se encontró teléfono del chofer' }, { status: 404 })
+      .maybeSingle()
+
+    if (choferErr) return NextResponse.json({ ok: false, error: `DB choferes: ${choferErr.message}` }, { status: 500 })
+    if (!chofer?.telefono) return NextResponse.json({ ok: false, error: 'No se encontró teléfono del chofer' }, { status: 404 })
+
+    // 3) Asegurar link del chofer
+    let token: string | null = null
+    {
+      const { data: linkRow, error: linkErr } = await supabaseAdmin
+        .from('viajes_links')
+        .select('token')
+        .eq('viaje_id', viajeId)
+        .maybeSingle()
+      if (linkErr) return NextResponse.json({ ok: false, error: `DB viajes_links (select): ${linkErr.message}` }, { status: 500 })
+
+      if (linkRow?.token) {
+        token = linkRow.token
+      } else {
+        token = crypto.randomBytes(16).toString('hex')
+        const { error: insErr } = await supabaseAdmin
+          .from('viajes_links')
+          .insert({ viaje_id: viajeId, token })
+        if (insErr) return NextResponse.json({ ok: false, error: `DB viajes_links (insert): ${insErr.message}` }, { status: 500 })
+      }
     }
 
-    // link del portal
-    const { data: linkRow } = await supabaseAdmin
-      .from('viajes_links')
-      .select('token')
-      .eq('viaje_id', viajeId)
-      .maybeSingle()
-    const baseUrl = resolveBaseUrl(req)
-    const portalUrl = linkRow?.token ? `${baseUrl}/chofer/${linkRow.token}` : baseUrl
+    const portalUrl = `${base}/chofer/${token}`
 
-    // mensaje
-    const texto = customMsg || `Tenés un viaje asignado (ID: ${viajeId}). Link: ${portalUrl}`
+    // 4) Log preliminar
+    const texto = customMsg || `Tenés un viaje asignado (ID: ${viajeId}). Ingresá para marcar entregas: ${portalUrl}`
 
-    // log preliminar
-    const { data: prelim, error: insErr } = await supabaseAdmin
+    const { data: prelim, error: logErr } = await supabaseAdmin
       .from('mensajes_chofer')
       .insert({
         viaje_id: viajeId,
@@ -75,76 +87,82 @@ export async function POST(req: NextRequest) {
         canal,
         mensaje: texto,
         archivo_url: mediaUrl ?? null,
-        estado: 'pendiente'
+        estado: dryRun ? 'simulado' : 'pendiente',
       })
       .select('id')
-      .single()
-    if (insErr) throw insErr
+      .maybeSingle()
 
-    // Twilio client (validaciones DENTRO del handler para no romper el build)
-    const ACC_SID = process.env.TWILIO_ACCOUNT_SID
-    const AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN
+    if (logErr) return NextResponse.json({ ok: false, error: `DB mensajes_chofer (insert): ${logErr.message}` }, { status: 500 })
+
+    // 5) Si solo queremos la URL (sin enviar), devolver y salir
+    if (dryRun) {
+      return NextResponse.json({ ok: true, dryRun: true, portalUrl, preview: texto })
+    }
+
+    // 6) Twilio
+    const ACC_SID = asStr(process.env.TWILIO_ACCOUNT_SID)
+    const AUTH_TOKEN = asStr(process.env.TWILIO_AUTH_TOKEN)
     if (!ACC_SID || !AUTH_TOKEN) {
-      return NextResponse.json({ error: 'Faltan TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN' }, { status: 500 })
+      return NextResponse.json({ ok: false, error: 'Faltan TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN' }, { status: 500 })
     }
     const client = twilio(ACC_SID, AUTH_TOKEN)
 
-    // payload Twilio
-    const to = canal === 'whatsapp'
-      ? `whatsapp:${toE164(asStr(chofer.telefono))}`
-      : toE164(asStr(chofer.telefono))
+    // Teléfono destino
+    const dest = asStr(chofer.telefono)
+    if (!isE164(dest)) {
+      return NextResponse.json({ ok: false, error: 'Teléfono del chofer inválido (usar formato E.164, ej: +54911...)' }, { status: 400 })
+    }
+    const to = canal === 'whatsapp' ? (dest.startsWith('whatsapp:') ? dest : `whatsapp:${dest}`) : dest
 
+    // Mensajería: messaging service o from
     const params: any = { to, body: texto }
-    if (baseUrl && !baseUrl.includes('localhost')) {
-      params.statusCallback = `${baseUrl}/api/webhooks/twilio-status`
+    if (!base.includes('localhost')) {
+      params.statusCallback = `${base}/api/webhooks/twilio-status`
     }
     if (mediaUrl) params.mediaUrl = [mediaUrl]
 
-    const MSG_SVC = process.env.TWILIO_MESSAGING_SERVICE_SID || ''
+    const MSG_SVC = asStr(process.env.TWILIO_MESSAGING_SERVICE_SID)
     if (MSG_SVC) {
       params.messagingServiceSid = MSG_SVC
     } else {
       if (canal === 'whatsapp') {
-        const FROM = process.env.TWILIO_WHATSAPP_FROM
-        if (!FROM) return NextResponse.json({ error: 'Falta TWILIO_WHATSAPP_FROM' }, { status: 500 })
-        params.from = FROM // ej: 'whatsapp:+14155238886' (sandbox) o tu WABA
+        const FROM = asStr(process.env.TWILIO_WHATSAPP_FROM) // 'whatsapp:+14155238886' o tu WABA
+        if (!FROM) return NextResponse.json({ ok: false, error: 'Falta TWILIO_WHATSAPP_FROM' }, { status: 500 })
+        params.from = FROM
       } else {
-        const FROM = process.env.TWILIO_SMS_FROM
-        if (!FROM) return NextResponse.json({ error: 'Falta TWILIO_SMS_FROM' }, { status: 500 })
-        params.from = FROM // ej: '+1XXXXXXXXXX'
+        const FROM = asStr(process.env.TWILIO_SMS_FROM)
+        if (!FROM) return NextResponse.json({ ok: false, error: 'Falta TWILIO_SMS_FROM' }, { status: 500 })
+        params.from = FROM
       }
     }
 
     const tw = await client.messages.create(params)
 
-    // actualizar log → enviado
+    // 7) Actualizar log + estado del viaje
     await supabaseAdmin
       .from('mensajes_chofer')
       .update({ proveedor_msg_id: tw.sid, estado: 'enviado', updated_at: new Date().toISOString() })
-      .eq('id', prelim.id)
+      .eq('id', prelim?.id)
 
-    // avanzar estado del viaje
     await supabaseAdmin.from('viajes').update({ estado: 'en_progreso' }).eq('id', viajeId)
 
     return NextResponse.json({ ok: true, sid: tw.sid, portalUrl })
   } catch (e: any) {
-    // log de fallo (si pudimos parsear body)
+    // log de fallo si se pudo parsear el body
     try {
       if (parsedBody?.viajeId) {
-        await supabaseAdmin
-          .from('mensajes_chofer')
-          .insert({
-            viaje_id: parsedBody.viajeId,
-            chofer_id: null,
-            telefono: 'desconocido',
-            canal: parsedBody?.canal || 'whatsapp',
-            mensaje: parsedBody?.mensaje || null,
-            estado: 'fallo',
-            error_detalle: String(e?.message || e),
-          })
+        await supabaseAdmin.from('mensajes_chofer').insert({
+          viaje_id: parsedBody.viajeId,
+          chofer_id: null,
+          telefono: 'desconocido',
+          canal: parsedBody?.canal || 'whatsapp',
+          mensaje: parsedBody?.mensaje || null,
+          estado: 'fallo',
+          error_detalle: String(e?.message || e),
+        })
       }
     } catch { /* noop */ }
 
-    return NextResponse.json({ error: String(e?.message || e) }, { status: 500 })
+    return NextResponse.json({ ok: false, error: String(e?.message || e) }, { status: 500 })
   }
 }
