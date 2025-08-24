@@ -3,6 +3,8 @@
 import { useEffect, useState } from 'react'
 import { useParams } from 'next/navigation'
 
+type Estado = 'pendiente' | 'completado' | 'fallido'
+
 type Entrega = {
   id: string
   orden: number | null
@@ -11,9 +13,10 @@ type Entrega = {
   localidad: string | null
   provincia: string | null
   remito: string | null
-  estado_entrega: 'pendiente' | 'completado' | 'fallido'
+  estado: Estado                 // <- columna correcta en DB
   observaciones: string | null
   completado_at: string | null
+  _saving?: boolean              // <- UI flag local
 }
 
 export default function PortalChoferPage() {
@@ -37,7 +40,20 @@ export default function PortalChoferPage() {
       const r = await fetch(`/api/chofer/${token}/entregas`, { cache: 'no-store' })
       const j = await r.json()
       if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`)
-      setItems(j.entregas ?? [])
+      // Aseguramos que llegue como `estado`
+      const rows: Entrega[] = (j.entregas ?? []).map((e: any) => ({
+        id: e.id,
+        orden: e.orden ?? null,
+        subcliente: e.subcliente ?? null,
+        direccion: e.direccion ?? null,
+        localidad: e.localidad ?? null,
+        provincia: e.provincia ?? null,
+        remito: e.remito ?? null,
+        estado: e.estado as Estado,          // <- normalizado
+        observaciones: e.observaciones ?? null,
+        completado_at: e.completado_at ?? null,
+      }))
+      setItems(rows)
     } catch (e: any) {
       setErr(String(e?.message || e))
     } finally {
@@ -45,26 +61,38 @@ export default function PortalChoferPage() {
     }
   }
 
-  const marcar = async (id: string, estado: 'completado' | 'pendiente' | 'fallido') => {
+  const marcar = async (id: string, estado: Estado) => {
     setErr(null)
+    // Optimistic UI: marcar saving y estado temporal
+    setItems(prev =>
+      prev.map(e => (e.id === id ? { ...e, _saving: true, estado, completado_at: estado === 'completado' ? new Date().toISOString() : null } : e))
+    )
+
     try {
       const r = await fetch(`/api/chofer/${token}/entregas/${id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ estado }),
+        body: JSON.stringify({ estado }),   // <- valores: 'pendiente' | 'completado' | 'fallido'
       })
       const j = await r.json().catch(() => ({}))
       if (!r.ok || j?.error) {
+        // rollback si falló
+        setItems(prev => prev.map(e => (e.id === id ? { ...e, _saving: false } : e)))
         setErr(j?.error || `HTTP ${r.status}`)
         return
       }
-      load()
+      // Refrescar desde servidor para quedar consistentes
+      await load()
     } catch (e: any) {
+      setItems(prev => prev.map(ent => (ent.id === id ? { ...ent, _saving: false } : ent)))
       setErr(String(e?.message || e))
     }
   }
 
-  useEffect(() => { load() }, [token])
+  useEffect(() => {
+    load()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token])
 
   if (!token) return <div className="p-6 text-red-600">Token inválido</div>
   if (loading) return <div className="p-6">Cargando…</div>
@@ -80,13 +108,31 @@ export default function PortalChoferPage() {
             <div className="font-medium">{e.subcliente ?? '—'}</div>
             <div className="text-sm text-gray-600">{e.direccion ?? '—'}</div>
             <div className="text-sm mt-1">
-              Estado: <b>{e.estado_entrega}</b>
+              Estado: <b>{e.estado}</b>
               {e.completado_at ? ` · ${new Date(e.completado_at).toLocaleString()}` : ''}
             </div>
             <div className="flex gap-2 mt-2">
-              <button className="border rounded px-2 py-1" onClick={() => marcar(e.id, 'completado')}>Completado</button>
-              <button className="border rounded px-2 py-1" onClick={() => marcar(e.id, 'pendiente')}>Pendiente</button>
-              <button className="border rounded px-2 py-1" onClick={() => marcar(e.id, 'fallido')}>Fallido</button>
+              <button
+                className="border rounded px-2 py-1"
+                disabled={e._saving}
+                onClick={() => marcar(e.id, 'completado')}
+              >
+                {e._saving && e.estado === 'completado' ? 'Guardando…' : 'Completado'}
+              </button>
+              <button
+                className="border rounded px-2 py-1"
+                disabled={e._saving}
+                onClick={() => marcar(e.id, 'pendiente')}
+              >
+                {e._saving && e.estado === 'pendiente' ? 'Guardando…' : 'Pendiente'}
+              </button>
+              <button
+                className="border rounded px-2 py-1"
+                disabled={e._saving}
+                onClick={() => marcar(e.id, 'fallido')}
+              >
+                {e._saving && e.estado === 'fallido' ? 'Guardando…' : 'Fallido'}
+              </button>
             </div>
           </li>
         ))}
